@@ -306,6 +306,22 @@ public function createAndNotify(UserData $data): User;
 public function create(UserData $data): User; // also sends email?
 ```
 
+### Directory Creation Must Be Validated
+
+Never create a directory without checking the result. `mkdir()` can fail silently due to permissions, race conditions, or disk issues. Always validate and throw explicitly:
+
+```php
+// Bad — ignores mkdir failure
+if (! is_dir($libDir)) {
+    mkdir($libDir, 0755, true);
+}
+
+// Good — validates the result and fails fast
+if (!is_dir($libDir) && !mkdir($libDir, 0755, true) && !is_dir($libDir)) {
+    throw new \RuntimeException(sprintf('Directory "%s" was not created', $libDir));
+}
+```
+
 ## Dependency Injection
 
 ### Prefer Constructor Injection
