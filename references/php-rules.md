@@ -560,8 +560,8 @@ if ($tool === null) {
 
 ### Routing
 - Prefer named routes
-- Group and add prefix
-- Use `route()` function, never hardcode URLs
+- Group and add prefix routes to organize better
+- Use `route()` function, never hardcode URLs, including the tests
 
 ### Queue
 - Use `ShouldQueue` for time-consuming operations
