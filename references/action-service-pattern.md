@@ -1,4 +1,4 @@
-# Action Pattern Reference
+# Action and Services Pattern Reference
 
 ## Overview
 
