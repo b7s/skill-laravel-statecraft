@@ -43,12 +43,12 @@ class UserController
 class UserController
 {
     public function __construct(
-        private readonly CreateUser $createUser,
+        private readonly CreateUser $createUserAction,
     ) {}
 
     public function store(CreateUserRequest $request): UserResource
     {
-        $user = $this->createUser->execute($request->validated());
+        $user = $this->createUserAction($request->validated());
         return new UserResource($user);
     }
 }
@@ -446,11 +446,17 @@ Order by cost (cheapest first):
 3. Never reorder side effects
 
 ```php
+// Bad
+if (is_array($array['key']) && isset($array['key'])) {}
+
+// Bad
+if ($someClass->doSomething() && isset($array['key'])) {}
+
 // Good
 if (isset($array['key']) && is_array($array['key'])) {}
 
-// Bad
-if (is_array($array['key']) && isset($array['key'])) {}
+// Good
+if (isset($array['key']) && $someClass->doSomething()) {}
 ```
 
 ---
@@ -537,7 +543,7 @@ if ($tool === null) {
 ### Models
 - Use `casts()` method over `$casts` property (Laravel 12+)
 - Always create factories and seeders
-- Always use `Model::query()->where()` not `Model::where()`
+- Always use "::query()->": `Model::query()->where()` not `Model::where()`
 - Add PHPDoc for all properties (see Type Safety section)
 
 ### Database
@@ -545,6 +551,7 @@ if ($tool === null) {
 - Prevent N+1 with eager loading
 - When modifying columns, include ALL previous attributes
 - Laravel 12+ native limit: `$query->latest()->limit(10)`
+- Be careful when returning large amounts of data to avoid degradation; use limit, cursor, or paginate methods.
 
 ### Relationships
 - Always use proper Eloquent methods
@@ -553,6 +560,7 @@ if ($tool === null) {
 
 ### Routing
 - Prefer named routes
+- Group and add prefix
 - Use `route()` function, never hardcode URLs
 
 ### Queue
@@ -583,7 +591,7 @@ public function store(CreateUserRequest $request): UserResource
     $user = $this->createUser->execute($request->validated());
     
     // Place at END to signal "after response"
-    defer(fn () => Log::info('User created', ['id' => $user->id]));
+    defer(static fn () => Log::info('User created', ['id' => $user->id]));
     
     return new UserResource($user);
 }
@@ -652,7 +660,7 @@ Always use Filament Artisan commands: `php artisan --help`
 ./vendor/bin/pint                    # 1. Fix code style
 ./vendor/bin/pest --parallel         # 2. Run tests
 ./vendor/bin/phpstan analyse         # 3. Static analysis (level 6)
-./vendor/bin/catraca                 # 4. Quality metrics
+./vendor/bin/catraca                 # 4. Quality Gate
 ```
 
 **All must pass before work is complete.**

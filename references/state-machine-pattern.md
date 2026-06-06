@@ -245,8 +245,8 @@ it('can be paid from pending', function () {
 
     $event = $invoice->markPaid('pay_123');
 
-    expect($invoice->status)->toBe(InvoiceStatus::Paid);
-    expect($event->paymentId)->toBe('pay_123');
+    expect($invoice->status)->toBe(InvoiceStatus::Paid)
+        ->and($event->paymentId)->toBe('pay_123');
 });
 
 it('cannot be paid from draft', function () {
@@ -265,8 +265,8 @@ it('cannot be paid twice', function () {
 ```
 
 **Coverage goals:**
-- Every valid transition tested once.
-- Every invalid transition tested once.
+- Every valid transition is tested once.
+- Every invalid transition is tested once.
 - **No test requires another context's database tables.**
 
 ## Common Pitfalls
@@ -304,4 +304,10 @@ app/Actions/Billing/
 ├── CancelInvoice.php
 ├── ListInvoices.php
 └── GetInvoice.php
+
+app/Services/Billing/
+├── TaxCalculator.php
+└── InvoiceService.php
+
+...
 ```

@@ -95,9 +95,9 @@ it('can be paid from pending status', function () {
 
     $event = $invoice->markPaid('pay_123');
 
-    expect($invoice->status)->toBe(InvoiceStatus::Paid);
-    expect($invoice->payment_id)->toBe('pay_123');
-    expect($event->paymentId)->toBe('pay_123');
+    expect($invoice->status)->toBe(InvoiceStatus::Paid)
+        ->and($invoice->payment_id)->toBe('pay_123');
+        ->and($event->paymentId)->toBe('pay_123');
 });
 
 it('cannot be paid from draft status', function () {
@@ -131,8 +131,8 @@ it('marks invoice as paid', function () {
     $action = new MarkInvoicePaid();
     $result = $action($invoice, 'pay_123');
 
-    expect($result->status)->toBe(InvoiceStatus::Paid);
-    expect($result->payment_id)->toBe('pay_123');
+    expect($result->status)->toBe(InvoiceStatus::Paid)
+        ->and($result->payment_id)->toBe('pay_123');
 });
 
 it('rolls back transaction on failure', function () {
@@ -207,8 +207,8 @@ it('sends receipt email', function () {
 it('retries on failure', function () {
     $job = new SendReceiptEmail(Invoice::factory()->create());
 
-    expect($job->tries)->toBe(3);
-    expect($job->backoff())->toBe([60, 300, 900]);
+    expect($job->tries)->toBe(3)
+        ->and($job->backoff())->toBe([60, 300, 900]);
 });
 ```
 
@@ -235,13 +235,13 @@ it('retries on failure', function () {
 
 ## Catraca Quality Metrics
 
-| Metric | Threshold | Why |
-|---|---|---|
-| **Code duplication** | < 5% duplicated lines | DRY violations |
-| **Class length** | < 1000 lines | SRP violations |
-| **Method length** | < 50 lines | Too much responsibility |
-| **Cyclomatic complexity** | < 10 per method | Hard to test/understand |
-| **Parameter count** | < 5 per method | Refactor to DTO |
+| Metric | Threshold             | Why |
+|---|-----------------------|---|
+| **Code duplication** | < 2% duplicated lines | DRY violations |
+| **Class length** | < 1000 lines          | SRP violations |
+| **Method length** | < 50 lines            | Too much responsibility |
+| **Cyclomatic complexity** | < 10 per method       | Hard to test/understand |
+| **Parameter count** | < 5 per method        | Refactor to DTO |
 
 ## Summary
 
