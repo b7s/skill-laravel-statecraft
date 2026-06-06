@@ -199,6 +199,28 @@ public function company(): BelongsTo
 }
 ```
 
+**Simplified Use of Where**
+
+When you can search using the Model without referencing the ID.
+Using `whereBelongsTo()` is better because it makes the code cleaner, reduces errors with column names, and automatically works with any primary key in the model (including UUID or custom keys), making the query more expressive and resilient to changes; allowing Laravel to automatically figure out which column to use based on the defined relationship.
+
+```php
+// Bad
+Post::query()
+    ->where('user_id', $this->user->id)
+    ->get();
+
+// Good
+Post::query()
+    ->whereBelongsTo($this->user)
+    ->get();
+
+// Good - Specifying the relationship (if there is more than one possible key)
+Post::query()
+    ->whereBelongsTo($this->user, 'user')
+    ->get();
+```
+
 ### Use Enums, Never Magic Strings
 
 **Bad — stringly typed:**
