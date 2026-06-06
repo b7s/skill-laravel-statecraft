@@ -535,10 +535,9 @@ if ($tool === null) {
 - Pass `--no-interaction` for non-interactive execution
 - Max 60 lines (thin orchestrator)
 
-### Controllers
-- Keep thin, delegate to Actions
-- Max 1000 lines
-- No business logic
+### Controllers / Services
+- Keep methods thin, delegate to Actions
+- Max 1000 lines per file
 
 ### Models
 - Use `casts()` method over `$casts` property (Laravel 12+)
