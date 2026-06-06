@@ -247,7 +247,7 @@ Cross-context relationships documented in code: `references/cross-context-commen
 ### Initial Setup
 
 ```bash
-composer require --dev pestphp/pest laravel/pint nunomaduro/larastan b7s/catraca
+composer require --dev pestphp/pest laravel/pint larastan/larastan b7s/catraca
 php artisan pest:install
 ```
 

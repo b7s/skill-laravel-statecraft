@@ -16,7 +16,7 @@ Quality gates are mandatory checkpoints that ensure code meets standards before 
 ## Initial Setup
 
 ```bash
-composer require --dev pestphp/pest laravel/pint nunomaduro/larastan b7s/catraca
+composer require --dev pestphp/pest laravel/pint larastan/larastan b7s/catraca
 php artisan pest:install
 
 cat > phpstan.neon <<'EOF'
