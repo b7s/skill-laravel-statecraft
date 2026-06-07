@@ -213,6 +213,10 @@ Post::query()
 // Good
 Post::query()
     ->whereBelongsTo($this->user)
+    //or ->whereBelongsTo(request()->user())
+    //or ->whereBelongsTo($request->user()) // \Illuminate\Http\Request $request
+    //or ->whereBelongsTo(auth()->user())
+    //or ->whereBelongsTo(Auth::user()) // \Illuminate\Support\Facades\Auth
     ->get();
 
 // Good - Specifying the relationship (if there is more than one possible key)
