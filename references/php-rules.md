@@ -145,6 +145,7 @@ Every constant, property, parameter, and return type must be explicitly typed.
 ```php
 const int MAX_RETRIES = 3;
 const string API_VERSION = 'v2';
+const array ITEMS = [];
 ```
 
 **Typed properties:**
@@ -243,6 +244,11 @@ enum PaymentStatus: string
     case Completed = 'completed';
     case Failed = 'failed';
     
+    public static function default(): self
+    {
+        return self::Pending;
+    }
+    
     public function label(): string
     {
         return match ($this) {
@@ -250,11 +256,6 @@ enum PaymentStatus: string
             self::Completed => 'Payment received',
             self::Failed => 'Payment failed',
         };
-    }
-    
-    public static function default(): self
-    {
-        return self::Pending;
     }
     
     public static function options(): array
@@ -326,14 +327,14 @@ Never allow empty `__construct()` unless private (singletons/factories).
 ### Control Structures
 Always use curly braces:
 ```php
+// Bad
+if ($value === null)
+    return;
+    
 // Good
 if ($value === null) {
     return;
 }
-
-// Bad
-if ($value === null)
-    return;
 ```
 
 ### Static Closures
@@ -346,6 +347,12 @@ $filtered = array_filter(
 
 ### Import Classes, Not FQCN
 ```php
+// Bad
+class ImportService
+{
+    public function process(): \App\Models\User { /* ... */ }
+}
+
 // Good
 use App\Models\User;
 use App\Services\TaxCalculator;
@@ -353,12 +360,6 @@ use App\Services\TaxCalculator;
 class ImportService
 {
     public function process(): User { /* ... */ }
-}
-
-// Bad
-class ImportService
-{
-    public function process(): \App\Models\User { /* ... */ }
 }
 ```
 
@@ -420,7 +421,7 @@ if ($value === null) { /* ... */ }
 if ($status === Status::Active) { /* ... */ }
 ```
 
-### Modern String Functions
+### Modern PHP String Functions
 ```php
 // Good
 if (str_contains($haystack, $needle)) {}
@@ -490,7 +491,7 @@ if (isset($array['key']) && $someClass->doSomething()) {}
 ## Error Handling
 
 ### Fail Fast with Guard Clauses
-Validate preconditions first, keep happy path at top level:
+Validate preconditions first, keep a happy path at top level:
 
 ```php
 public function processOrder(OrderData $data): OrderResult
