@@ -696,6 +696,7 @@ Always use Filament Artisan commands: `php artisan --help`
 
 - Never modify unrelated files
 - Prefer PHPDoc blocks over inline comments
+- Every function and class must have a little description on a PHPDoc block, explaining what it does and why it should be used, to improve understanding of an AI agent, avoiding the need to read all the documentation (See `cross-context-comments.md` for comment conventions).
 - Every change requires tests
 - Run minimum tests needed for speed
 - Always add return types
