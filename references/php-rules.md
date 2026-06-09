@@ -432,6 +432,8 @@ if (str_ends_with($file, '.php')) {}
 if (strpos($haystack, $needle) !== false) {}
 ```
 
+The same for `mb_*` functions.
+
 ### Avoid `count()` in Loops
 ```php
 // Best
