@@ -643,7 +643,8 @@ php artisan test --compact --filter=testName
 - Use datasets to reduce duplication
 - Browser tests in `tests/Browser/`
 - Never delete tests without approval
-- Always use test database
+- Always use a test database
+- Mockery can't create mocks for readonly classes, you need to use a PHP Interface file
 
 ---
 
@@ -700,5 +701,6 @@ Always use Filament Artisan commands: `php artisan --help`
 - Every function and class must have a little description on a PHPDoc block, explaining what it does and why it should be used, to improve understanding of an AI agent, avoiding the need to read all the documentation (See `cross-context-comments.md` for comment conventions).
 - Every change requires tests
 - Run minimum tests needed for speed
+- For tests, Mockery can't create mocks for readonly classes; you need to use a PHP Interface file
 - Always add return types
 - Omit parentheses around `new`: `new Product()->getPrice()` not `(new Product())->getPrice()`
