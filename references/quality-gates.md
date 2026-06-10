@@ -71,6 +71,15 @@ Detects code duplication (DRY violations), Single Responsibility violations, cyc
 
 ## Testing Requirements
 
+### Database Safety (Non-Negotiable)
+
+Every test that touches the database must run on a **dedicated test database**.
+
+- Use `php artisan test` which automatically switches to the test database
+- Or ensure `DB_CONNECTION` in `.env.testing` points to a separate test database
+- Never run tests against a development, staging, or production database
+- Always verify the environment before running destructive operations in tests
+
 ### Coverage by Type
 
 | Component | Test Type | What to Test |
@@ -109,14 +118,14 @@ it('cannot be paid from draft status', function () {
 it('cannot be paid twice', function () {
     $invoice = Invoice::factory()->create(['status' => InvoiceStatus::Pending]);
     $invoice->markPaid('pay_123');
-    $invoice->save();
-    $invoice->refresh();
 
     $invoice->markPaid('pay_456');
 })->throws(InvalidTransitionException::class);
 ```
 
 ### Action Tests
+
+**Test real behaviour against a real database.** Assert on outcomes — database state, model state, event dispatch — not on method calls. Use `Event::fake()` only to verify the correct event was dispatched without coupling to listener implementations.
 
 ```php
 <?php
@@ -133,6 +142,37 @@ it('marks invoice as paid', function () {
 
     expect($result->status)->toBe(InvoiceStatus::Paid)
         ->and($result->payment_id)->toBe('pay_123');
+
+    assertDatabaseHas('invoices', [
+        'id' => $invoice->id,
+        'status' => InvoiceStatus::Paid->value,
+        'payment_id' => 'pay_123',
+    ]);
+});
+
+it('dispatches the correct event', function () {
+    $invoice = Invoice::factory()->create(['status' => InvoiceStatus::Pending]);
+
+    Event::fake([InvoicePaid::class]);
+    $action = new MarkInvoicePaid();
+    $result = $action($invoice, 'pay_123');
+
+    Event::assertDispatched(
+        InvoicePaid::class,
+        fn (InvoicePaid $event) => $event->invoiceId === $result->id,
+    );
+});
+
+it('skips event dispatch when dispatchEvent is false', function () {
+    $invoice = Invoice::factory()->create(['status' => InvoiceStatus::Pending]);
+
+    Event::fake([InvoicePaid::class]);
+    $action = new MarkInvoicePaid();
+    $result = $action($invoice, 'pay_123', dispatchEvent: false);
+
+    expect($result->status)->toBe(InvoiceStatus::Paid);
+
+    Event::assertNotDispatched(InvoicePaid::class);
 });
 
 it('rolls back transaction on failure', function () {
@@ -140,8 +180,8 @@ it('rolls back transaction on failure', function () {
 
     try {
         DB::transaction(function () use ($invoice) {
-            $invoice->markPaid('pay_123');
-            $invoice->save();
+            $action = new MarkInvoicePaid();
+            $action($invoice, 'pay_123');
             throw new \RuntimeException('Simulated failure');
         });
     } catch (\RuntimeException) {

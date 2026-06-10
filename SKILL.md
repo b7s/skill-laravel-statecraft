@@ -32,7 +32,7 @@ Contexts communicate through **explicit integration patterns** (Customer/Supplie
 
 1. **Bounded Contexts Are the First Boundary** — Split before you share.
 2. **Eloquent Models Own Transitions** — No status checks in controllers or services.
-3. **Events Are Facts** — Transitions return domain events. The model does NOT dispatch them.
+3. **Events Are Facts** — Transitions return domain events. Actions dispatch them by default; the model does NOT dispatch them.
 4. **Side Effects Belong to Jobs** — Email, SMS, API calls happen in queued jobs.
 5. **Use Laravel Primitives** — Share string IDs and int amounts. Custom casts only when complex.
 6. **Async Is First-Class** — Model waiting with job delays and event listeners.
@@ -40,7 +40,8 @@ Contexts communicate through **explicit integration patterns** (Customer/Supplie
 8. **Fail Fast, Explicitly** — Guard clauses at the top. Typed exceptions immediately.
 9. **Domain First, Deployment Second** — Bounded Contexts are domain, not deployment.
 10. **Test Everything** — Every action, transition, and listener requires Pest tests.
-11. **Quality Gates Are Mandatory** — Run `./vendor/bin/pest --parallel` and `./vendor/bin/catraca` after every change.
+11. **Database Safety** — Tests must always run against a dedicated test database. Never run against the user's development or production database.
+12. **Quality Gates Are Mandatory** — Run `./vendor/bin/pest --parallel` and `./vendor/bin/catraca` after every change.
 
 ## Why Bounded Contexts?
 
@@ -58,14 +59,15 @@ HTTP Request → Route → FormRequest (validation) → Controller
                                          [SIMPLE]               [COMPLEX]
                                               │                      │
                                               ↓                      ↓
-                                         Action              Service → Actions
+                                           Action            Service → Actions
                                               │                      │
                                               ↓                      ↓
                                          Model.transition()    Model.transition()
                                          DB::transaction()     DB::transaction()
                                               │                      │
                                               ↓                      ↓
-                                         Returns result         Dispatches event
+                                         Returns result /      Dispatches event
+                                         Dispatches event            │
                                               │                      │
                                               └──────────┬───────────┘
                                                          ↓
@@ -75,6 +77,7 @@ HTTP Request → Route → FormRequest (validation) → Controller
 ### Simple Path — Controller calls Action directly
 
 ```php
+// Controller
 class InvoiceController extends Controller
 {
     public function pay(PayInvoiceRequest $request, Invoice $invoice, MarkInvoicePaid $action)
@@ -84,18 +87,25 @@ class InvoiceController extends Controller
     }
 }
 
+// Action
 final class MarkInvoicePaid
 {
-    public function __invoke(Invoice $invoice, string $paymentId): Invoice
+    public function __invoke(Invoice $invoice, string $paymentId, bool $dispatchEvent = true): Invoice
     {
-        return DB::transaction(function () use ($invoice, $paymentId): Invoice {
-            $invoice->markPaid($paymentId);
+        return DB::transaction(function () use ($invoice, $paymentId, $dispatchEvent): Invoice {
+            $event = $invoice->markPaid($paymentId);
             $invoice->save();
+
+            if ($dispatchEvent) {
+                event($event);
+            }
+
             return $invoice;
         });
     }
 }
 
+// Model
 class Invoice extends Model
 {
     public function markPaid(string $paymentId): InvoicePaid
@@ -140,8 +150,6 @@ final class InvoiceService
         $invoice = $this->createInvoice([...]);
         $invoice = $this->markPaid($invoice, $payment->id);
         $this->generatePdf($invoice);
-
-        event(new InvoicePaid($invoice->id, $invoice->order_id, $payment->id, now()));
 
         return $invoice;
     }
@@ -239,7 +247,7 @@ Cross-context relationships documented in code: `references/cross-context-commen
 
 1. A bounded context defines its own model + enum + events.
 2. The model's transition method validates state, changes it, returns a domain event.
-3. The action calls the transition, persists with `save()`. The service dispatches the event.
+3. The action calls the transition, persists with `save()`, and dispatches the event by default.
 4. A listener starts a job chain in response.
 
 ## Mandatory Quality Gates
@@ -265,9 +273,11 @@ php artisan pest:install
 | Type | Coverage |
 |---|---|
 | Model transitions | Every valid + invalid transition |
-| Actions | Happy path + rollback |
+| Actions | Happy path + rollback + assert database state |
 | Listeners | Job dispatch with `Bus::fake()` |
 | Jobs | Execution + failure handling |
+
+**Database Safety:** Every test that touches the database must run on a dedicated test database. Use `php artisan test` which automatically switches to the test database, or ensure `DB_CONNECTION` in your `.env.testing` points to a separate database. Never run tests against a development, staging, or production database.
 
 See `references/quality-gates.md` for complete testing patterns.
 
@@ -280,13 +290,14 @@ See `references/quality-gates.md` for complete testing patterns.
 | 3 | Status Type Safety | Enum with `default()` method |
 | 4 | Transition Ownership | Status checks in model only |
 | 5 | Side Effect Purity | No emails/API calls in model methods |
-| 6 | Event Explicitness | Transitions return events; services dispatch |
+| 6 | Event Explicitness | Transitions return events; actions dispatch by default |
 | 7 | Action Consistency | One action per file, DB transactions, no HTTP |
 | 8 | Test Coverage | Every action, transition, listener tested |
-| 9 | PHPStan | Level 6 compliance |
-| 10 | Code Style | Laravel Pint formatted |
-| 11 | Quality Metrics | b7s/catraca passes |
-| 12 | Automated | Run after every change |
+| 9 | Database Safety | Tests run on a dedicated test database only |
+| 10 | PHPStan | Level 6 compliance |
+| 11 | Code Style | Laravel Pint formatted |
+| 12 | Quality Metrics | b7s/catraca passes |
+| 13 | Automated | Run after every change |
 
 ## Stop Conditions
 

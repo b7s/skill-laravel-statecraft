@@ -183,7 +183,7 @@ final readonly class InvoicePaid
 
 ### 5. Action Class Bridges Model and Infrastructure
 
-The action calls the model's transition method and persists with `save()` inside a DB transaction. The **service** (not the action) dispatches the event.
+The action calls the model's transition method, persists with `save()` inside a DB transaction, and dispatches the event by default. Pass `$dispatchEvent = false` to suppress the event when needed (e.g., batch processing, re-imports).
 
 ```php
 <?php
@@ -195,18 +195,23 @@ use App\Models\Invoice;
 
 final class MarkInvoicePaid
 {
-    public function __invoke(Invoice $invoice, string $paymentId): Invoice
+    public function __invoke(Invoice $invoice, string $paymentId, bool $dispatchEvent = true): Invoice
     {
-        return DB::transaction(function () use ($invoice, $paymentId): Invoice {
-            $invoice->markPaid($paymentId);
+        return DB::transaction(function () use ($invoice, $paymentId, $dispatchEvent): Invoice {
+            $event = $invoice->markPaid($paymentId);
             $invoice->save();
+
+            if ($dispatchEvent) {
+                event($event);
+            }
+
             return $invoice;
         });
     }
 }
 ```
 
-**The service dispatches the event:**
+**Service – Call action that's dispatch the event:**
 
 ```php
 namespace App\Services\Billing;
@@ -219,11 +224,25 @@ final class InvoicePaymentService
 
     public function processPayment(Invoice $invoice, string $paymentId): Invoice
     {
-        $invoice = $this->markPaid($invoice, $paymentId);
+        return $this->markPaid($invoice, $paymentId);
+    }
+}
+```
 
-        event(new InvoicePaid($invoice->id, $invoice->order_id, $paymentId, now()));
+**Suppressing the event when needed (e.g., batch processing):**
 
-        return $invoice;
+```php
+namespace App\Services\Billing;
+
+final class InvoiceBatchService
+{
+    public function __construct(
+        private readonly MarkInvoicePaid $markPaid,
+    ) {}
+
+    public function processBatch(Invoice $invoice, string $paymentId): Invoice
+    {
+        return $this->markPaid($invoice, $paymentId, dispatchEvent: false);
     }
 }
 ```
@@ -231,6 +250,8 @@ final class InvoicePaymentService
 See `action-service-pattern.md` for the full action/service rules.
 
 ### 6. Testing
+
+Test transition methods in isolation. They do not touch the database — they validate state, mutate properties, and return events.
 
 ```php
 <?php
@@ -258,10 +279,31 @@ it('cannot be paid from draft', function () {
 it('cannot be paid twice', function () {
     $invoice = Invoice::factory()->create(['status' => InvoiceStatus::Pending->value]);
     $invoice->markPaid('pay_123');
-    $invoice->save();
 
     $invoice->markPaid('pay_456');
 })->throws(InvalidTransitionException::class);
+```
+
+**Test the action against a real database** — the action wraps the transition, persists, and dispatches the event. Assert on real outcomes, not mocks.
+
+**Database Safety:** Always run tests on a dedicated test database. Use `php artisan test` (switches automatically) or configure `.env.testing` with a separate `DB_DATABASE`. Never run tests against development or production databases.
+
+```php
+it('marks invoice as paid through the action', function () {
+    $invoice = Invoice::factory()->create(['status' => InvoiceStatus::Pending->value]);
+
+    $action = new MarkInvoicePaid();
+    $result = $action($invoice, 'pay_123');
+
+    expect($result->status)->toBe(InvoiceStatus::Paid)
+        ->and($result->payment_id)->toBe('pay_123');
+
+    assertDatabaseHas('invoices', [
+        'id' => $invoice->id,
+        'status' => InvoiceStatus::Paid->value,
+        'payment_id' => 'pay_123',
+    ]);
+});
 ```
 
 **Coverage goals:**

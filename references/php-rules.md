@@ -706,3 +706,4 @@ Always use Filament Artisan commands: `php artisan --help`
 - For tests, Mockery can't create mocks for readonly classes; you need to use a PHP Interface file
 - Always add return types
 - Omit parentheses around `new`: `new Product()->getPrice()` not `(new Product())->getPrice()`
+- When use `uniqid()` function, always add the parameter `more_entropy` as `true`: `uniqid(more_entropy: true)`

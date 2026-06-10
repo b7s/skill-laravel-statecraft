@@ -53,7 +53,7 @@ final readonly class InvoicePaid
 ```
 
 ```php
-// app/Services/Billing/InvoicePaymentService.php — SUPPLIER dispatches
+// app/Services/Billing/InvoicePaymentService.php — SUPPLIER orchestrates
 final class InvoicePaymentService
 {
     public function __construct(
@@ -62,14 +62,12 @@ final class InvoicePaymentService
 
     public function processPayment(Invoice $invoice, string $paymentId): Invoice
     {
-        $invoice = $this->markPaid($invoice, $paymentId);
-
-        event(new InvoicePaid($invoice->id, $invoice->order_id, $paymentId, now()));
-
-        return $invoice;
+        return $this->markPaid($invoice, $paymentId);
     }
 }
 ```
+
+The `MarkInvoicePaid` action dispatches the `InvoicePaid` event by default. The service no longer needs to dispatch it manually.
 
 ```php
 // app/Listeners/Fulfillment/OnInvoicePaidStartShipment.php — CUSTOMER subscribes

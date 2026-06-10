@@ -23,7 +23,7 @@ Actions live in `App\Actions\{Context}\` as a flat folder — one file per actio
 | **Returns** | Model, Collection, DTO, string, or void | Orchestrators: Model/DTO; Logic services: calculated value |
 | **Examples** | `CreateInvoice`, `MarkInvoicePaid`, `GenerateInvoicePdf` | Orchestrators: `InvoiceService`, `OrderService`; Logic: `TaxCalculator`, `PricingEngine` |
 | **Composability** | NEVER calls other actions | Orchestrators call actions; Logic services call other logic services |
-| **Testability** | Test with real DB (RefreshDatabase) | Orchestrators: mock actions; Logic: pure assertions |
+| **Testability** | Test with real DB (RefreshDatabase) | Orchestrators: test with real actions; Logic: pure assertions |
 
 **Key principle:**
 - **1 operation = Action**
@@ -63,11 +63,16 @@ final class CreateInvoice
 
 final class MarkInvoicePaid
 {
-    public function __invoke(Invoice $invoice, string $paymentId): Invoice
+    public function __invoke(Invoice $invoice, string $paymentId, bool $dispatchEvent = true): Invoice
     {
-        return DB::transaction(function () use ($invoice, $paymentId): Invoice {
-            $invoice->markPaid($paymentId);
+        return DB::transaction(function () use ($invoice, $paymentId, $dispatchEvent): Invoice {
+            $event = $invoice->markPaid($paymentId);
             $invoice->save();
+
+            if ($dispatchEvent) {
+                event($event);
+            }
+
             return $invoice;
         });
     }
@@ -309,11 +314,16 @@ Actions that mutate state wrap their operation in `DB::transaction()`. No nested
 ```php
 final class MarkInvoicePaid
 {
-    public function __invoke(Invoice $invoice, string $paymentId): Invoice
+    public function __invoke(Invoice $invoice, string $paymentId, bool $dispatchEvent = true): Invoice
     {
-        return DB::transaction(function () use ($invoice, $paymentId): Invoice {
-            $invoice->markPaid($paymentId);
+        return DB::transaction(function () use ($invoice, $paymentId, $dispatchEvent): Invoice {
+            $event = $invoice->markPaid($paymentId);
             $invoice->save();
+
+            if ($dispatchEvent) {
+                event($event);
+            }
+
             return $invoice;
         });
     }
@@ -679,6 +689,10 @@ Flat folder per context. No subfolders beyond the context.
 
 ## Testing
 
+**Test the real action against a real database.** Assert on outcomes — database state, model state, response shape — not on method calls. Mocks are the last choice, reserved for external boundaries you do not control.
+
+**Database Safety:** Ensure `php artisan test` is used (it switches to the test database automatically), or that `DB_CONNECTION` in `.env.testing` points to a database dedicated for testing. Never run tests against development, staging, or production databases.
+
 ```php
 it('marks invoice as paid', function () {
     $invoice = Invoice::factory()->create(['status' => InvoiceStatus::Pending->value]);
@@ -688,6 +702,7 @@ it('marks invoice as paid', function () {
 
     expect($result->status)->toBe(InvoiceStatus::Paid);
     expect($result->payment_id)->toBe('pay_123');
+    assertDatabaseHas('invoices', ['id' => $invoice->id, 'status' => InvoiceStatus::Paid->value]);
 });
 
 it('rolls back on failure', function () {
@@ -695,8 +710,8 @@ it('rolls back on failure', function () {
 
     try {
         DB::transaction(function () use ($invoice) {
-            $invoice->markPaid('pay_123');
-            $invoice->save();
+            $action = new MarkInvoicePaid();
+            $action($invoice, 'pay_123');
             throw new \RuntimeException('Simulated failure');
         });
     } catch (\RuntimeException) {
@@ -712,7 +727,7 @@ it('rolls back on failure', function () {
 - Mutating actions tested for rollback on failure
 - Read actions tested with filter combinations
 - Transition actions tested for invalid state guards
-- Orchestrator services tested with mocked actions
+- Orchestrator services tested with real actions (not mocked)
 
 ## Common Pitfalls
 
@@ -721,7 +736,7 @@ it('rolls back on failure', function () {
 | Action receives Request object | Not reusable from console/jobs/other services | Accept array or DTO |
 | Action validates input | Duplicates Form Request validation | Let Form Request validate |
 | Action calls other actions | Violates Single Responsibility; should be service | Extract to Service |
-| Action dispatches jobs | Two responsibilities (execute + schedule) | Service dispatches jobs |
+| Action dispatches jobs | Two responsibilities (execute + schedule) | Service dispatches jobs; actions dispatch domain events only |
 | No DB transaction | Partial writes on failure | Wrap in `DB::transaction()` |
 | Querying another context's model directly | Hard coupling across bounded contexts | Use integration patterns |
 | HTTP concerns in action | Not reusable from non-HTTP layers | Keep logout, session, redirect in controller |

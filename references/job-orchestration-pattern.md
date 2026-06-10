@@ -110,14 +110,15 @@ namespace App\Jobs\Billing;
 
 use App\Models\Invoice;
 use App\Enums\Billing\InvoiceStatus;
+use App\Actions\Billing\CancelInvoice;
 
 class ProcessUnpaidInvoice implements ShouldQueue
 {
     public function __construct(
-        public readonly int $invoiceId,
-    ) {}
+    public readonly int $invoiceId,
+) {}
 
-    public function handle(): void
+    public function handle(CancelInvoice $cancelInvoice): void
     {
         $invoice = Invoice::query()->find($this->invoiceId);
 
@@ -125,8 +126,7 @@ class ProcessUnpaidInvoice implements ShouldQueue
             return;
         }
 
-        $invoice->cancel();
-        $invoice->save();
+        $cancelInvoice($invoice, dispatchEvent: false);
 
         SendCancellationEmail::dispatch($invoice);
     }
@@ -316,7 +316,7 @@ class ProcessPayment
     }
 }
 
-// GOOD — Billing service dispatches event, Fulfillment listener starts job
+// GOOD — Billing action dispatches event, Fulfillment listener starts job
 namespace App\Services\Billing;
 
 class InvoicePaymentService
@@ -327,13 +327,12 @@ class InvoicePaymentService
 
     public function processPayment(Invoice $invoice, string $paymentId): Invoice
     {
-        $invoice = $this->markPaid($invoice, $paymentId);
-
-        event(new InvoicePaid($invoice->id, $invoice->order_id, $paymentId, now()));
-
-        return $invoice;
+        return $this->markPaid($invoice, $paymentId);
     }
 }
+
+// The MarkInvoicePaid action dispatches InvoicePaid by default.
+// No manual event() call needed in the service.
 ```
 
 ## Testing
