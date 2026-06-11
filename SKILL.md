@@ -46,6 +46,7 @@ Contexts communicate through **explicit integration patterns** (Customer/Supplie
 14. **Audit Before Side Effects** — State-changing actions write append-only audit records inside the transaction, before dispatching jobs or events.
 15. **Jobs Respect Transaction Boundaries** — Events dispatched inside `DB::transaction()` use `DB::afterCommit()` so they only fire after the data is committed.
 16. **Request Tracing Is Non-Negotiable** — Every API route runs `X-Request-ID` middleware.
+17. **Form Requests Only, No Inline Validate** — Controllers must use Form Requests for validation, never `$request->validate()`. The Form Request validates and returns the 422 Problem+JSON automatically; the controller only receives validated input via `$request->payload()`.
 
 ## Why Bounded Contexts?
 
@@ -81,6 +82,11 @@ class PayInvoiceController extends Controller
 // Form Request with payload()
 final class PayInvoiceRequest extends FormRequest
 {
+    public function authorize(): bool
+    {
+        return true;
+    }
+
     public function rules(): array
     {
         return [
@@ -322,6 +328,7 @@ See `references/quality-gates.md` for complete testing patterns.
 | 16 | Transaction Safety | Events inside transactions use `DB::afterCommit()` |
 | 17 | Request Tracing | X-Request-ID middleware on all API routes |
 | 18 | API Versioning | Versioned from day one (`/v1/` prefix) |
+| 19 | Validation Layer | Form Requests only — no inline `$request->validate()` in controllers |
 
 ## Stop Conditions
 

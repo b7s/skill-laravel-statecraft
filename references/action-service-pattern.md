@@ -357,10 +357,16 @@ declare(strict_types=1);
 
 namespace App\Http\Requests;
 
+use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Http\FormRequest;
 
 final class IssueKeyRequest extends FormRequest
 {
+    public function authorize(): bool
+    {
+        return true;
+    }
+
     public function rules(): array
     {
         return [
@@ -377,7 +383,7 @@ final class IssueKeyRequest extends FormRequest
             name: $this->string('name')->toString(),
             scopes: $this->collect('scopes')->map(KeyScope::from(...)),
             expiresAt: filled($this->input('expires_at'))
-                ? \Carbon\CarbonImmutable::parse($this->string('expires_at')->toString())
+                ? CarbonImmutable::parse($this->string('expires_at')->toString())
                 : null,
         );
     }
@@ -416,8 +422,98 @@ final class IssueKeyController extends Controller
 
         return new KeyResource($key);
     }
+```
+
+#### Defaults in `payload()`
+
+`payload()` is where domain defaults are applied. A nullable field with a sensible default passes that default to the payload, not `null`. The action downstream never needs to know whether a value came from the request or from a default — it receives a fully resolved domain intent.
+
+```php
+<?php
+
+declare(strict_types=1);
+
+namespace App\Http\Requests\Keys\V1;
+
+use App\Domain\Keys\Payloads\RevokeKeyPayload;
+use Illuminate\Foundation\Http\FormRequest;
+
+final class RevokeKeyRequest extends FormRequest
+{
+    public function authorize(): bool
+    {
+        return true;
+    }
+
+    public function rules(): array
+    {
+        return [
+            'reason' => ['nullable', 'string', 'max:500'],
+        ];
+    }
+
+    public function payload(): RevokeKeyPayload
+    {
+        return new RevokeKeyPayload(
+            reason: $this->string('reason')->toString() ?: null,
+        );
+    }
 }
 ```
+
+```php
+<?php
+
+declare(strict_types=1);
+
+namespace App\Domain\Keys\Payloads;
+
+final readonly class RevokeKeyPayload
+{
+    public function __construct(
+        public ?string $reason,
+    ) {}
+}
+```
+
+For more involved requests, defaults express domain decisions at the HTTP boundary:
+
+```php
+<?php
+
+declare(strict_types=1);
+
+namespace App\Http\Requests\Keys\V1;
+
+use App\Domain\Keys\Payloads\RotateKeyPayload;
+use Illuminate\Foundation\Http\FormRequest;
+
+final class RotateKeyRequest extends FormRequest
+{
+    public function authorize(): bool
+    {
+        return true;
+    }
+
+    public function rules(): array
+    {
+        return [
+            'grace_period_hours' => ['nullable', 'integer', 'min:1', 'max:168'],
+            'require_acknowledgement' => ['nullable', 'boolean'],
+        ];
+    }
+
+    public function payload(): RotateKeyPayload
+    {
+        return new RotateKeyPayload(
+            gracePeriodHours: $this->integer('grace_period_hours', 24),
+            requireAcknowledgement: $this->boolean('require_acknowledgement', true),
+        );
+    }
+}
+```
+
+The grace period defaults to 24 hours if not specified. Acknowledgement is required by default. These are domain decisions expressed at the boundary where HTTP input becomes domain intent.
 
 ### 5. Every Mutating Action Wraps in a DB Transaction
 

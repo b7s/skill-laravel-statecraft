@@ -79,6 +79,26 @@ Identify duplication via `b7s/catraca`. Common duplications:
 
 **Validation is NOT business logic** — Extract to FormRequests, DTOs, or Validators
 
+**Controllers must use Form Requests, never inline `validate()`:**
+
+```php
+// BAD — inline validation in controller
+public function store(Request $request): Response
+{
+    $data = $request->validate(['name' => 'required']);
+    // ...
+}
+
+// GOOD — Form Request validates before the controller runs
+public function store(CreateUserRequest $request): UserResource
+{
+    $user = $this->createUserAction($request->payload());
+    return new UserResource($user);
+}
+```
+
+Form Requests also handle the default validation error response automatically (422 Problem+JSON with per-field errors). The controller never has to think about validation or error formatting — it only receives validated input via `$request->payload()`.
+
 **Side effects must be explicit:**
 ```php
 // Good — explicit
