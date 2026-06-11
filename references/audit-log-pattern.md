@@ -101,7 +101,7 @@ final class MarkInvoicePaid
 
             // 3. Dispatch domain event after commit — see job-orchestration-pattern.md
             if ($dispatchEvent) {
-                DB::afterCommit(fn () => event($event));
+                DB::afterCommit(static fn () => event($event));
             }
 
             return $invoice;

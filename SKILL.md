@@ -116,7 +116,7 @@ final class MarkInvoicePaid
             ]);
 
             if ($dispatchEvent) {
-                DB::afterCommit(fn () => event($event));
+                DB::afterCommit(static fn () => event($event));
             }
 
             return $invoice;

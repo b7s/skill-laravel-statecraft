@@ -77,7 +77,7 @@ final class MarkInvoicePaid
             $invoice->save();
 
             if ($dispatchEvent) {
-                DB::afterCommit(fn () => event($event));
+                DB::afterCommit(static fn () => event($event));
             }
 
             return $invoice;
@@ -433,7 +433,7 @@ final class MarkInvoicePaid
             $invoice->save();
 
             if ($dispatchEvent) {
-                DB::afterCommit(fn () => event($event));
+                DB::afterCommit(static fn () => event($event));
             }
 
             return $invoice;
@@ -456,7 +456,7 @@ final class MarkInvoicePaid
             $invoice->save();
 
             if ($dispatchEvent) {
-                DB::afterCommit(fn () => event($event));
+                DB::afterCommit(static fn () => event($event));
             }
 
             return $invoice;
@@ -939,7 +939,7 @@ it('rolls back on failure', function () {
 | Action calls other actions | Violates Single Responsibility; should be service | Extract to Service |
 | Action dispatches jobs | Two responsibilities (execute + schedule) | Service dispatches jobs; actions emit domain events only via `DB::afterCommit()` |
 | No DB transaction | Partial writes on failure | Wrap in `DB::transaction()` |
-| Event dispatched inside transaction without `DB::afterCommit()` | Listeners fire before commit; stale data on rollback | Use `DB::afterCommit(fn () => event($event))` |
+| Event dispatched inside transaction without `DB::afterCommit()` | Listeners fire before commit; stale data on rollback | Use `DB::afterCommit(static fn () => event($event))` |
 | Querying another context's model directly | Hard coupling across bounded contexts | Use integration patterns |
 | HTTP concerns in action | Not reusable from non-HTTP layers | Keep logout, session, redirect in controller |
 | Subfolders inside Actions/ | Unnecessary complexity | Flat folder; IDEs handle 100+ files |
