@@ -281,7 +281,7 @@ final class InvoiceService
 
 | Mechanism | Scope | When to Use |
 |---|---|---|
-| `DB::afterCommit(fn () => ...)` | **Any code** inside a transaction — events, jobs, logs | Actions emitting domain events inside `DB::transaction()` |
+| `DB::afterCommit(static fn () => ...)` | **Any code** inside a transaction — events, jobs, logs | Actions emitting domain events inside `DB::transaction()` |
 | `SomeJob::dispatch()->afterCommit()` | **Queued jobs only** | Jobs dispatched inside a transaction that read the written data |
 
 **Prefer `DB::afterCommit()` in actions** because actions emit domain events, not dispatch jobs directly. Jobs are dispatched by listeners or services.
@@ -530,7 +530,7 @@ it('schedules timeout job for 7 days', function () {
 | No timeout | Jobs hang forever | Set `public int $timeout = 300;` |
 | Cross-context job calls | Hard coupling | Use events + listeners |
 | No state checks in delayed jobs | Process stale data | Check model state at job start |
-| Forgetting `DB::afterCommit()` | Event fires before transaction commits | Use `DB::afterCommit(fn () => event(...))` in actions |
+| Forgetting `DB::afterCommit()` | Event fires before transaction commits | Use `DB::afterCommit(static fn () => event(...))` in actions |
 | Missing `failed()` method | No cleanup on permanent failure | Implement `failed(\Throwable $e)` |
 
 ## Summary
