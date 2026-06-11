@@ -338,6 +338,6 @@ See `references/quality-gates.md` for complete testing patterns.
 - `references/state-machine-pattern.md` — Model transitions, enums, events
 - `references/job-orchestration-pattern.md` — Chains, batches, retry logic, afterCommit
 - `references/audit-log-pattern.md` — Append-only audit records, actor tracking, JSONB context
-- `references/api-patterns.md` — Idempotency keys, route versioning, Sunset headers
-- `references/php-rules.md` — PHP/Laravel coding standards, RFC 9457 error responses, request tracing
+- `references/api-patterns.md` — Problem+JSON error responses, idempotency keys, route versioning, Sunset headers
+- `references/php-rules.md` — PHP/Laravel coding standards, request tracing
 - `references/quality-gates.md` — Testing, PHPStan, Pint, Catraca

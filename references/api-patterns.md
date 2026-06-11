@@ -2,7 +2,240 @@
 
 ## Overview
 
-Production Laravel APIs need predictable, safe, and observable behavior beyond domain logic. This reference covers two critical API-level concerns: **idempotency** and **route versioning**.
+Production Laravel APIs need predictable, safe, and observable behavior beyond domain logic. This reference covers three critical API-level concerns: **error responses (Problem+JSON)**, **idempotency**, and **route versioning**.
+
+---
+
+## Error Responses (RFC 9457 Problem+JSON)
+
+APIs must return a **single, predictable error shape** for every failure. When errors are inconsistent, client-side error handling becomes a map of special cases — one endpoint uses `errors`, another `error`, another `message`, another a `200` with `success: false`. Every special case is a place the client goes wrong. Consistent errors mean one client-side function that reads `status`, pulls `detail`, maybe extracts `errors` on 422s. That function works for every endpoint.
+
+Use **RFC 9457 Problem+JSON** with these fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `type` | `string` | URI identifying the error type |
+| `title` | `string` | Short, human-readable title |
+| `status` | `int` | HTTP status code (mirrors the actual response status) |
+| `detail` | `string` | Human-readable explanation specific to this occurrence |
+| `errors` | `array` | *(optional)* Per-field validation errors: `field => string[]` |
+
+```json
+{
+    "type": "https://httpstatuses.com/422",
+    "title": "Unprocessable Entity",
+    "status": 422,
+    "detail": "Cannot pay invoice from status 'draft'",
+    "errors": {
+        "status": ["Invalid transition from draft to paid."]
+    }
+}
+```
+
+### Exception Configuration in bootstrap/app.php
+
+In Laravel 11+, exceptions are handled through `bootstrap/app.php` using `->withExceptions()`. There is no separate `Handler.php` class — the configuration lives alongside everything else in the application bootstrap.
+
+```php
+// bootstrap/app.php
+->withExceptions(function (Exceptions $exceptions) {
+    $exceptions->render(function (ValidationException $e) {
+        return problem(
+            status: 422,
+            title: 'Unprocessable Entity',
+            detail: 'The request data did not pass validation.',
+            extra: ['errors' => $e->errors()],
+        );
+    });
+
+    $exceptions->render(function (AuthenticationException $e) {
+        return problem(
+            status: 401,
+            title: 'Unauthorized',
+            detail: 'Authentication is required to access this resource.',
+        );
+    });
+
+    $exceptions->render(function (ModelNotFoundException $e) {
+        return problem(
+            status: 404,
+            title: 'Not Found',
+            detail: 'The requested resource does not exist.',
+        );
+    });
+
+    $exceptions->render(function (NotFoundHttpException $e) {
+        return problem(
+            status: 404,
+            title: 'Not Found',
+            detail: 'The requested endpoint does not exist.',
+        );
+    });
+
+    $exceptions->render(function (HttpException $e) {
+        return problem(
+            status: $e->getStatusCode(),
+            title: title_for_status($e->getStatusCode()),
+            detail: $e->getMessage() ?: title_for_status($e->getStatusCode()),
+        );
+    });
+
+    $exceptions->render(function (Throwable $e) {
+        if (!app()->environment('production')) {
+            return null;
+        }
+
+        return problem(
+            status: 500,
+            title: 'Internal Server Error',
+            detail: 'An unexpected error occurred. Please try again later.',
+        );
+    });
+})
+```
+
+The `Content-Type` header on every error response is `application/problem+json`, not `application/json`. This is part of the RFC 9457 spec, and it matters for clients that want to detect Problem+JSON responses programmatically. The fallback `Throwable` handler returns `null` in non-production environments, which lets Laravel's default exception rendering show the full stack trace during development. In production, it returns a generic 500. Internal exception details must never leak into production API responses. The render callbacks are evaluated in registration order, and Laravel uses the first match — specific exception types are registered before the generic `HttpException` handler, which is before the catch-all `Throwable` handler. Order matters.
+
+### The `problem()` Helper and `title_for_status()`
+
+These live in `app/Support/helpers.php` (or any autoloaded file of your choosing):
+
+```php
+<?php
+
+declare(strict_types=1);
+
+use Illuminate\Http\JsonResponse;
+
+function problem(
+    int $status,
+    string $title,
+    string $detail,
+    array $extra = [],
+): JsonResponse {
+    return response()->json(array_merge([
+        'type' => 'https://httpstatuses.com/' . $status,
+        'title' => $title,
+        'status' => $status,
+        'detail' => $detail,
+    ], $extra), $status, [
+        'Content-Type' => 'application/problem+json',
+    ]);
+}
+
+function title_for_status(int $status): string
+{
+    return match ($status) {
+        400 => 'Bad Request',
+        401 => 'Unauthorized',
+        403 => 'Forbidden',
+        404 => 'Not Found',
+        405 => 'Method Not Allowed',
+        409 => 'Conflict',
+        422 => 'Unprocessable Entity',
+        429 => 'Too Many Requests',
+        500 => 'Internal Server Error',
+        503 => 'Service Unavailable',
+        default => 'Error',
+    };
+}
+```
+
+### Domain Exceptions as First-Class Errors
+
+Domain exceptions are not unexpected failures — they are known, named outcomes of domain operations. `InvalidKeyTransitionException` when a key transition is attempted that the lifecycle does not allow. `InvalidKeyScopeException` when an operation is attempted with an insufficient scope. They should produce informative 422 or 403 responses, not 500s.
+
+Register them in `withExceptions` alongside the framework exceptions:
+
+```php
+$exceptions->render(function (InvalidKeyTransitionException $e) {
+    return problem(
+        status: 422,
+        title: 'Invalid State Transition',
+        detail: $e->getMessage(),
+    );
+});
+
+$exceptions->render(function (InvalidKeyScopeException $e) {
+    return problem(
+        status: 403,
+        title: 'Forbidden',
+        detail: $e->getMessage(),
+    );
+});
+```
+
+The exception carries the human-readable explanation of what went wrong, and the handler maps it to the right HTTP status and Problem+JSON shape. The action class that throws `InvalidKeyTransitionException` does not need to know anything about HTTP — it throws a domain exception, the handler turns it into a contract-compliant response.
+
+### Domain Exception to HTTP Status Mapping
+
+| Domain Exception | HTTP Status | Rationale |
+|---|---|---|
+| `InvalidTransitionException` | `422` | Well-formed but semantically invalid action |
+| `InvalidKeyScopeException` | `403` | Insufficient scope for operation |
+| `NotFoundException` / `ModelNotFoundException` | `404` | Resource does not exist |
+| `ValidationException` | `422` | Input fails business rules |
+| `AuthenticationException` | `401` | Caller not authenticated |
+| `AuthorizationException` | `403` | Caller authenticated but not authorised |
+| `DomainException` (catch-all) | `422` | Generic business rule violation |
+| Everything else | `500` | Unexpected programmer error |
+
+**Rule:** Domain exceptions are **not unexpected failures**. They are named, known outcomes and deserve an informative `422` (not a generic `500`).
+
+### Testing the Error Layer
+
+Error shapes are part of your contract — they deserve the same test coverage as success paths. In Pest, a small helper reduces repetition:
+
+```php
+// tests/Support/assertions.php
+function assertProblemJson(
+    \Illuminate\Testing\TestResponse $response,
+    int $status,
+    string $title,
+): void {
+    $response
+        ->assertStatus($status)
+        ->assertHeader('Content-Type', 'application/problem+json')
+        ->assertJsonStructure(['type', 'title', 'status', 'detail'])
+        ->assertJsonFragment(['status' => $status, 'title' => $title]);
+}
+```
+
+Then in feature tests:
+
+```php
+it('returns a problem json response for invalid scope', function () {
+    $key = ApiKey::factory()->create([
+        'scopes' => [KeyScope::Read],
+        'status' => KeyStatus::Active,
+    ]);
+
+    $response = $this->withToken($key->raw_value)
+        ->postJson('/api/v1/keys');
+
+    assertProblemJson($response, 403, 'Forbidden');
+});
+
+it('returns per-field validation errors', function () {
+    $response = $this->actingAs(User::factory()->create())
+        ->postJson('/api/v1/keys', [
+            'name' => '',
+            'scopes' => ['invalid_scope'],
+        ]);
+
+    assertProblemJson($response, 422, 'Unprocessable Entity');
+    $response->assertJsonPath('errors.name.0', 'The name field is required.');
+});
+
+it('returns a 404 for missing keys', function () {
+    $response = $this->actingAs(User::factory()->create())
+        ->getJson('/api/v1/keys/' . Str::ulid());
+
+    assertProblemJson($response, 404, 'Not Found');
+});
+```
+
+The assertions are explicit and readable. Because the tests run against the actual exception configuration, they catch regressions if the handler's behaviour changes.
 
 ---
 
