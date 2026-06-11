@@ -141,15 +141,75 @@ Route::prefix($actualVersion)->group(function () {
 - The variable makes it trivial to find which version is "current" and prevents typo bugs (`'v1'` vs `'V1'` vs `'v01'`).
 - You can group all routes under the correct version using `prefix`. The variable on top will tell the AI agent which is the latest version.
 
-### Sunset Deprecated Versions
+### The Sunset Pattern
 
-When retiring a version, use the **Sunset** pattern from RFC 8594:
+Versioning lets you introduce breaking changes without breaking existing integrations — but versions accumulate. If you never retire old versions, you maintain v1, v2, v3 indefinitely. The Sunset pattern (RFC 8594) solves this: a standardised way to tell consumers a version is approaching retirement, giving them time and information to migrate before it disappears.
+
+The `Sunset` header carries the retirement date. The `Deprecation` header marks when the version was officially deprecated. Together they give consumers a timeline:
+
+```
+Deprecation: Mon, 01 Jul 2077 00:00:00 GMT
+Sunset: Sat, 31 Dec 2077 23:59:59 GMT
+```
+
+The `HttpSunset` middleware adds these headers to deprecated route groups, receiving its dates through Laravel's route middleware parameters:
 
 ```php
-$response->headers->set('Sunset', '2026-12-31');             // Retirement date
-$response->headers->set('Deprecation', '2026-06-01');       // Deprecation date
-$response->headers->set('Link', '<https://docs.example.com/migration-guide>; rel="sunset"');
+<?php
+
+declare(strict_types=1);
+
+namespace App\Http\Middleware;
+
+use Closure;
+use Illuminate\Http\Request;
+use Symfony\Component\HttpFoundation\Response;
+
+final class HttpSunset
+{
+    public function handle(
+        Request $request,
+        Closure $next,
+        string $deprecationDate,
+        string $sunsetDate,
+    ): Response {
+        $response = $next($request);
+
+        $response->headers->set('Deprecation', $deprecationDate);
+        $response->headers->set('Sunset', $sunsetDate);
+        $response->headers->set(
+            'Link',
+            '</docs/migration/v1-to-v2>; rel="successor-version"'
+        );
+
+        return $response;
+    }
+}
 ```
+
+Apply it to a deprecated route group by passing the dates as middleware parameters:
+
+```php
+Route::prefix('v1')
+    ->middleware([
+        'sunset:Mon\, 01 Jul 2077 00:00:00 GMT,Sat\, 31 Dec 2077 23:59:59 GMT',
+    ])
+    ->group(function () {
+        require __DIR__ . '/api/v1/keys.php';
+    });
+```
+
+Register the alias in `bootstrap/app.php`:
+
+```php
+->withMiddleware(function (Middleware $middleware) {
+    $middleware->alias([
+        'sunset' => \App\Http\Middleware\HttpSunset::class,
+    ]);
+})
+```
+
+The `Link` header pointing to a migration guide is the part teams most often skip — and it matters. A consumer whose monitoring picks up a `Sunset` header can follow the link directly to migration docs. The header becomes actionable, not just informational. Well-behaved API clients log warnings, alert the team, open tickets. The API communicates the timeline; the consumer has the runway to act on it.
 
 **Rule:** No version retires without at least **six months of notice**.
 

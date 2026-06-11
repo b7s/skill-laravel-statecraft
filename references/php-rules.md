@@ -174,12 +174,14 @@ $users = $repository->findActive();
 
 **PHPDoc for Model Properties:**
 ```php
+use Carbon\Carbon;
+
 /**
  * @property int $id
  * @property string $name
  * @property string $email
- * @property \Carbon\Carbon $created_at
- * @property \Carbon\Carbon $updated_at
+ * @property Carbon $created_at
+ * @property Carbon $updated_at
  */
 class User extends Model
 {
