@@ -21,15 +21,13 @@ php artisan pest:install
 
 cat > phpstan.neon <<'EOF'
 includes:
-- vendor/larastan/larastan/extension.neon
-
+    - vendor/larastan/larastan/extension.neon
 parameters:
-  level: 6
-  paths:
-  - app
-  excludePaths:
-  - app/Console/Kernel.php
-  checkMissingIterableValueType: false
+    level: 6
+    paths:
+        - app
+    ignoreErrors:
+        - '#Cannot cast mixed to string\.#'
 EOF
 ```
 
