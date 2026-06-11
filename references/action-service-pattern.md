@@ -74,7 +74,6 @@ final class MarkInvoicePaid
     {
         return DB::transaction(function () use ($invoice, $paymentId, $dispatchEvent): Invoice {
             $event = $invoice->markPaid($paymentId);
-            $invoice->save();
 
             if ($dispatchEvent) {
                 DB::afterCommit(static fn () => event($event));
@@ -526,7 +525,6 @@ final class MarkInvoicePaid
     {
         return DB::transaction(function () use ($invoice, $paymentId, $dispatchEvent): Invoice {
             $event = $invoice->markPaid($paymentId);
-            $invoice->save();
 
             if ($dispatchEvent) {
                 DB::afterCommit(static fn () => event($event));
@@ -549,7 +547,6 @@ final class MarkInvoicePaid
     {
         return DB::transaction(function () use ($invoice, $paymentId, $dispatchEvent): Invoice {
             $event = $invoice->markPaid($paymentId);
-            $invoice->save();
 
             if ($dispatchEvent) {
                 DB::afterCommit(static fn () => event($event));

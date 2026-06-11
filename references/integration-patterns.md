@@ -33,22 +33,40 @@ The upstream context (Supplier) publishes domain events. The downstream context 
 6. **Jobs for side effects.** Listeners dispatch jobs for async work (emails, API calls, multi-step processes).
 
 ### Example
-
 ```php
 // app/Events/Billing/InvoicePaid.php — SUPPLIER publishes
 <?php
+
 declare(strict_types=1);
 
 namespace App\Events\Billing;
 
-final readonly class InvoicePaid
+use App\Events\DomainEvent;
+use App\Models\Invoice;
+
+final readonly class InvoicePaid extends DomainEvent
 {
     public function __construct(
-        public int $invoiceId,
+        int $invoiceId,
         public string $orderId,
         public string $paymentId,
-        public \DateTimeImmutable $paidAt,
-    ) {}
+        \DateTimeImmutable $paidAt,
+    ) {
+        parent::__construct($invoiceId, $paidAt);
+    }
+
+    public function entityType(): string
+    {
+        return Invoice::class;
+    }
+
+    public function auditContext(): array
+    {
+        return [
+            'order_id' => $this->orderId,
+            'payment_id' => $this->paymentId,
+        ];
+    }
 }
 ```
 

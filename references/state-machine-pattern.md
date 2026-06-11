@@ -83,6 +83,7 @@ class Invoice extends Model
 
         $this->status = InvoiceStatus::Paid;
         $this->payment_id = $paymentId;
+        $this->save();
 
         return new InvoicePaid(
             invoiceId: $this->id,
@@ -99,6 +100,7 @@ class Invoice extends Model
         }
 
         $this->status = InvoiceStatus::Cancelled;
+        $this->save();
 
         return new InvoiceCancelled(
             invoiceId: $this->id,
@@ -129,7 +131,8 @@ $invoice->warehouse_id = 'wh_01'; // That's Fulfillment's concern
 
 **Rules:**
 - Transition methods are the **only** place that mutates the status column.
-- No facades (`Mail::`, `Event::`, `Cache::`, `DB::`) inside transition methods.
+- Transition methods call `$this->save()` before returning the event. The action never calls `->save()` on the model.
+- No facades (`Mail::`, `Event::`, `Cache::`, `DB::`) inside transition methods. `save()` is allowed — it is model persistence, not a facade.
 - No cross-context model references. Reference by ID only.
 - Domain events live in `app/Events/{Context}/`.
 - Exceptions live in `app/Exceptions/`.
@@ -152,46 +155,138 @@ final class InvalidTransitionException extends \DomainException {}
 ├── InvalidStateException
 └── BusinessRuleViolationException
 ```
+### 4. Domain Events Extend a Shared Base Class
 
-### 4. Domain Events Are Value Objects
+Every domain event shares the same core: an entity ID and a timestamp. Instead of repeating these fields in every event class, extend an abstract `DomainEvent` base class. This eliminates duplication **and** gives the audit log and generic consumers a stable contract to work against.
 
-Events live in `app/Events/{Context}/`.
+**Base class** — lives in `app/Events/DomainEvent.php`:
 
 ```php
 <?php
+
+declare(strict_types=1);
+
+namespace App\Events;
+
+abstract readonly class DomainEvent
+{
+    public function __construct(
+        public readonly int $entityId,
+        public readonly \DateTimeImmutable $occurredAt,
+    ) {}
+
+    public function eventType(): string
+    {
+        return static::class;
+    }
+
+    abstract public function entityType(): string;
+
+    public function auditContext(): array
+    {
+        return [];
+    }
+}
+```
+
+**Concrete events** — each event only declares its context-specific fields. The shared `entityId` and `occurredAt` come from the base class:
+
+```php
+<?php
+
 declare(strict_types=1);
 
 namespace App\Events\Billing;
 
-final readonly class InvoicePaid
+use App\Events\DomainEvent;
+use App\Models\Invoice;
+
+final readonly class InvoicePaid extends DomainEvent
 {
     public function __construct(
-        public int $invoiceId,
-        public string $orderId,
-        public string $paymentId,
-        public \DateTimeImmutable $paidAt,
-    ) {}
+        int $invoiceId,
+        public readonly string $orderId,
+        public readonly string $paymentId,
+        \DateTimeImmutable $paidAt,
+    ) {
+        parent::__construct($invoiceId, $paidAt);
+    }
+
+    public function entityType(): string
+    {
+        return Invoice::class;
+    }
+
+    public function auditContext(): array
+    {
+        return [
+            'order_id' => $this->orderId,
+            'payment_id' => $this->paymentId,
+        ];
+    }
+}
+```
+
+```php
+<?php
+
+declare(strict_types=1);
+
+namespace App\Events\Billing;
+
+use App\Events\DomainEvent;
+use App\Models\Invoice;
+
+final readonly class InvoiceCancelled extends DomainEvent
+{
+    public function __construct(
+        int $invoiceId,
+        public readonly string $orderId,
+        \DateTimeImmutable $cancelledAt,
+    ) {
+        parent::__construct($invoiceId, $cancelledAt);
+    }
+
+    public function entityType(): string
+    {
+        return Invoice::class;
+    }
+
+    public function auditContext(): array
+    {
+        return [
+            'order_id' => $this->orderId,
+        ];
+    }
 }
 ```
 
 **Rules:**
-- Use `readonly class` or `readonly` properties.
-- Include the entity ID and a timestamp at minimum.
+- All domain events extend `DomainEvent`. Never create a standalone event class.
+- Child events only declare context-specific constructor parameters + call `parent::__construct(entityId, occurredAt)`.
+- `entityType()` is abstract — each event declares which model it belongs to.
+- `auditContext()` returns event-specific data for the audit log. Override when the event carries context beyond the entity ID.
+- `eventType()` returns the FQCN by default. Override for custom dot-notation strings like `'invoice.paid'`.
+- Use `readonly class` or `readonly` properties. `final readonly class` extending `abstract readonly class` is valid in PHP 8.2+.
 - Include only data needed by listeners/workflow steps — not the entire model state.
 - Never include infrastructure objects (Request, Response, Eloquent models).
 - One event per transition. `InvoicePaid` is correct. `InvoiceStatusChanged` is wrong.
+- Listeners access typed properties directly (`$event->paymentId`). Never use `auditContext()` in listeners — it exists for the audit log only.
 
+**What this unlocks:** The action no longer manually constructs `event_type`, `auditable_type`, `auditable_id`, and `occurred_at` for the audit log — those come from the event itself. See section 5 for the simplified audit log write.
 ### 5. Action Class Bridges Model and Infrastructure
 
-The action calls the model's transition method, persists with `save()` inside a DB transaction, and dispatches the event by default using `DB::afterCommit()`. Pass `$dispatchEvent = false` to suppress the event when needed (e.g., batch processing, re-imports).
+The action calls the model's transition method (which persists internally), records the audit log from the event, and dispatches the event by default using `DB::afterCommit()`. Pass `$dispatchEvent = false` to suppress the event when needed (e.g., batch processing, re-imports).
 
 ```php
 <?php
+
 declare(strict_types=1);
 
 namespace App\Actions\Billing;
 
 use App\Models\Invoice;
+use Illuminate\Support\Facades\DB;
 
 final class MarkInvoicePaid
 {
@@ -199,7 +294,8 @@ final class MarkInvoicePaid
     {
         return DB::transaction(function () use ($invoice, $paymentId, $dispatchEvent): Invoice {
             $event = $invoice->markPaid($paymentId);
-            $invoice->save();
+
+            AuditLog::record($event);
 
             if ($dispatchEvent) {
                 DB::afterCommit(static fn () => event($event));
@@ -209,6 +305,12 @@ final class MarkInvoicePaid
         });
     }
 }
+```
+
+Because the transition method calls `save()` internally and `AuditLog::record()` derives every field from the event, the action body is three lines: transition, audit, dispatch. Override the actor defaults when the action runs outside an HTTP context:
+
+```php
+AuditLog::record($event, actorType: 'system', actorId: 'scheduler');
 ```
 
 **Service – Call action that's dispatch the event:**
@@ -333,9 +435,11 @@ app/Models/
 app/Enums/Billing/
 └── InvoiceStatus.php
 
-app/Events/Billing/
-├── InvoicePaid.php
-└── InvoiceCancelled.php
+app/Events/
+├── DomainEvent.php
+└── Billing/
+    ├── InvoicePaid.php
+    └── InvoiceCancelled.php
 
 app/Exceptions/
 └── InvalidTransitionException.php

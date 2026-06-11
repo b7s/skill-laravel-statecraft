@@ -60,9 +60,9 @@ See `references/bounded-context-pattern.md` for the full breakdown.
 
 From the controller, two paths diverge:
 
-**Simple path:** Controller → Action → `Model.transition()` inside `DB::transaction()` → `AuditLog::create()` → `DB::afterCommit(fn() => event(...))` → HTTP Response
+**Simple path:** Controller → Action → `Model.transition()` inside `DB::transaction()` (save happens in the model) → `AuditLog::record($event)` → `DB::afterCommit(fn() => event(...))` → HTTP Response
 
-**Complex path:** Controller → Service → multiple Actions → each Action runs `Model.transition()` inside `DB::transaction()` → `AuditLog::create()` → `DB::afterCommit(fn() => event(...))` → Service dispatches Jobs → HTTP Response
+**Complex path:** Controller → Service → multiple Actions → each Action runs `Model.transition()` inside `DB::transaction()` (save happens in the model) → `AuditLog::record($event)` → `DB::afterCommit(fn() => event(...))` → Service dispatches Jobs → HTTP Response
 
 Both paths converge: every state-changing action writes an audit record inside the transaction, then emits its domain event only after commit via `DB::afterCommit()`.
 
@@ -109,17 +109,8 @@ final class MarkInvoicePaid
     {
         return DB::transaction(function () use ($invoice, $paymentId, $dispatchEvent): Invoice {
             $event = $invoice->markPaid($paymentId);
-            $invoice->save();
 
-            AuditLog::query()->create([
-                'event_type' => 'invoice.paid',
-                'auditable_type' => Invoice::class,
-                'auditable_id' => $invoice->id,
-                'actor_type' => Auth::user() ? User::class : 'system',
-                'actor_id' => Auth::id() ?? 'scheduler',
-                'context' => ['payment_id' => $paymentId, 'amount_cents' => $invoice->amount_cents],
-                'occurred_at' => now(),
-            ]);
+            AuditLog::record($event);
 
             if ($dispatchEvent) {
                 DB::afterCommit(static fn () => event($event));
@@ -141,6 +132,7 @@ class Invoice extends Model
 
         $this->status = InvoiceStatus::Paid;
         $this->payment_id = $paymentId;
+        $this->save();
 
         return new InvoicePaid($this->id, $this->order_id, $paymentId, now());
     }
@@ -198,7 +190,9 @@ See `references/action-service-pattern.md` for full rules, sync vs async, naming
 app/
 ├── Models/                          # Eloquent models with transition methods
 ├── Enums/{Context}/                 # Status enums (one per context)
-├── Events/{Context}/                # Domain events
+├── Events/
+│   ├── DomainEvent.php # Abstract base class (entityId + occurredAt)
+│   └── {Context}/      # Concrete events extending DomainEvent
 ├── Exceptions/                      # Typed exceptions
 ├── Actions/{Context}/               # One action per file, flat folder
 ├── Listeners/{Context}/             # Event listeners
@@ -272,7 +266,7 @@ Cross-context relationships documented in code: `references/cross-context-commen
 
 1. A bounded context defines its own model + enum + events.
 2. The model's transition method validates state, changes it, returns a domain event.
-3. The action calls the transition, persists with `save()`, and dispatches the event by default.
+3. The action calls the transition (which persists internally via `$this->save()`), records the audit log, and dispatches the event by default.
 4. A listener starts a job chain in response.
 
 ## Mandatory Quality Gates
@@ -342,7 +336,7 @@ See `references/quality-gates.md` for complete testing patterns.
 - `references/cross-context-comments.md` — Inline comment conventions
 - `references/integration-patterns.md` — Customer/Supplier, ACL, shared primitives
 - `references/action-service-pattern.md` — Actions + Services, sync vs async, payload pattern, invokable controllers
-- `references/state-machine-pattern.md` — Model transitions, enums, events
+- `references/state-machine-pattern.md` — Model transitions, enums, DomainEvent base class, events
 - `references/job-orchestration-pattern.md` — Chains, batches, retry logic, afterCommit
 - `references/audit-log-pattern.md` — Append-only audit records, actor tracking, JSONB context
 - `references/api-patterns.md` — Problem+JSON error responses, idempotency keys, route versioning, Sunset headers

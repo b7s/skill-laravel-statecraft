@@ -83,21 +83,9 @@ final class MarkInvoicePaid
         return DB::transaction(function () use ($invoice, $paymentId, $dispatchEvent): Invoice {
             // 1. Perform the operation
             $event = $invoice->markPaid($paymentId);
-            $invoice->save();
 
-            // 2. Write the audit record (before side effects)
-            AuditLog::query()->create([
-                'event_type' => 'invoice.paid',
-                'auditable_type' => Invoice::class,
-                'auditable_id' => $invoice->id,
-                'actor_type' => Auth::user() ? User::class : 'system',
-                'actor_id' => Auth::id() ?? 'scheduler',
-                'context' => [
-                    'payment_id' => $paymentId,
-                    'amount_cents' => $invoice->amount_cents,
-                ],
-                'occurred_at' => now(),
-            ]);
+            // 2. Record the audit entry (before side effects)
+            AuditLog::record($event);
 
             // 3. Dispatch domain event after commit — see job-orchestration-pattern.md
             if ($dispatchEvent) {
@@ -112,15 +100,24 @@ final class MarkInvoicePaid
 
 **Why this order matters:** The audit record is written **before** anything that could fail independently. It is the most durable thing in the whole system. If a downstream job (email, webhook) fails, the audit log still accurately records that the state transition happened. The event is deferred via `DB::afterCommit()` so it only fires after the transaction commits — listeners and their jobs never see uncommitted data.
 
+**Override actor defaults** when the action runs outside an HTTP context:
+
+```php
+AuditLog::record($event, actorType: 'system', actorId: 'scheduler');
+```
 ## Model
 
 ```php
 <?php
+
 declare(strict_types=1);
 
 namespace App\Models;
 
+use App\Events\DomainEvent;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\MorphTo;
+use Illuminate\Support\Facades\Auth;
 
 class AuditLog extends Model
 {
@@ -142,6 +139,22 @@ class AuditLog extends Model
         ];
     }
 
+    public static function record(
+        DomainEvent $event,
+        ?string $actorType = null,
+        string|int|null $actorId = null,
+    ): self {
+        return static::query()->create([
+            'event_type' => $event->eventType(),
+            'auditable_type' => $event->entityType(),
+            'auditable_id' => $event->entityId,
+            'actor_type' => $actorType ?? (Auth::user() ? User::class : 'system'),
+            'actor_id' => $actorId ?? Auth::id() ?? 'scheduler',
+            'context' => $event->auditContext(),
+            'occurred_at' => $event->occurredAt,
+        ]);
+    }
+
     public function auditable(): MorphTo
     {
         return $this->morphTo();
@@ -152,6 +165,19 @@ class AuditLog extends Model
         return $this->morphTo();
     }
 }
+```
+
+**How `record()` works:** It derives `event_type`, `auditable_type`, `auditable_id`, `context`, and `occurred_at` from the `DomainEvent` automatically. Actor resolution uses the authenticated user when available, falling back to `system`/`scheduler`. Pass named overrides when the action runs outside an HTTP context:
+
+```php
+// System-triggered action (cron, queue worker)
+AuditLog::record($event, actorType: 'system', actorId: 'scheduler');
+
+// API key actor
+AuditLog::record($event, actorType: ApiKey::class, actorId: $key->id);
+
+// Override context only (rare — usually auditContext() is sufficient)
+// If needed, extend the event's auditContext() instead of passing extra params here.
 ```
 
 ## Testing
