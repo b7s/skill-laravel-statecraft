@@ -48,7 +48,7 @@ class UserController
 
     public function store(CreateUserRequest $request): UserResource
     {
-        $user = $this->createUserAction($request->validated());
+        $user = $this->createUserAction($request->payload());
         return new UserResource($user);
     }
 }
@@ -538,6 +538,109 @@ class NotFoundException extends \RuntimeException {}
 class InvalidTransitionException extends \DomainException {}
 ```
 
+---
+
+## API Error Responses (RFC 9457 Problem+JSON)
+
+APIs must return a **single, predictable error shape** for every failure. Do not use Laravel's default multi-format responses (validation errors, model-not-found, unauthenticated — each with a different shape).
+
+Use **RFC 9457 Problem+JSON** with these fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `type` | `string` | URI identifying the error type (use `about:blank` for generic) |
+| `title` | `string` | Short, human-readable title |
+| `status` | `int` | HTTP status code (mirrors the actual response status) |
+| `detail` | `string` | Human-readable explanation specific to this occurrence |
+| `errors` | `array` | *(optional)* Per-field validation errors: `field => string[]` |
+
+```json
+{
+  "type": "about:blank",
+  "title": "Invalid transition",
+  "status": 422,
+  "detail": "Cannot pay invoice from status 'draft'",
+  "errors": {
+    "status": ["Invalid transition from draft to paid."]
+  }
+}
+```
+
+### Render Domain Exceptions as Problem+JSON
+
+Register typed exceptions in your `app/Exceptions/Handler.php` (or a custom renderable):
+
+```php
+public function register(): void
+{
+    $this->renderable(function (InvalidTransitionException $e, Request $request) {
+        if ($request->is('api/*') || $request->wantsJson()) {
+            return response()->json([
+                'type' => 'about:blank',
+                'title' => 'Invalid transition',
+                'status' => 422,
+                'detail' => $e->getMessage(),
+            ], 422);
+        }
+    });
+
+    $this->renderable(function (ModelNotFoundException $e, Request $request) {
+        if ($request->is('api/*') || $request->wantsJson()) {
+            return response()->json([
+                'type' => 'about:blank',
+                'title' => 'Not Found',
+                'status' => 404,
+                'detail' => $e->getMessage(),
+            ], 404);
+        }
+    });
+
+    $this->renderable(function (ValidationException $e, Request $request) {
+        if ($request->is('api/*') || $request->wantsJson()) {
+            return response()->json([
+                'type' => 'about:blank',
+                'title' => 'Validation Failure',
+                'status' => 422,
+                'detail' => 'The given data was invalid.',
+                'errors' => $e->errors(),
+            ], 422);
+        }
+    });
+}
+```
+
+### Fallback to Generic 500 in Production
+
+```php
+$this->renderable(function (\Throwable $e, Request $request) {
+    if (app()->isProduction()) {
+        return response()->json([
+            'type' => 'about:blank',
+            'title' => 'Internal Server Error',
+            'status' => 500,
+            'detail' => 'An unexpected error occurred.',
+        ], 500);
+    }
+
+    // In non-production, Laravel's default handler shows full stack traces
+    return null;
+});
+```
+
+### Domain Exception to HTTP Status Mapping
+
+| Domain Exception | HTTP Status | Rationale |
+|---|---|---|
+| `InvalidTransitionException` | `422` | Well-formed but semantically invalid action |
+| `NotFoundException` / `ModelNotFoundException` | `404` | Resource does not exist |
+| `ValidationException` | `422` | Input fails business rules |
+| `AuthenticationException` | `401` | Caller not authenticated |
+| `AuthorizationException` | `403` | Caller authenticated but not authorised |
+| `DomainException` (catch-all) | `422` | Generic business rule violation |
+| Everything else | `500` | Unexpected programmer error |
+
+**Rule:** Domain exceptions are **not unexpected failures**. They are named, known outcomes and deserve an informative `422` (not a generic `500`).
+
 ### Validate Directory Creation
 ```php
 // Good
@@ -616,7 +719,7 @@ if ($tool === null) {
 ```php
 public function store(CreateUserRequest $request): UserResource
 {
-    $user = $this->createUser->execute($request->validated());
+    $user = $this->createUser->execute($request->payload());
     
     // Place at END to signal "after response"
     defer(static fn () => Log::info('User created', ['id' => $user->id]));
@@ -639,6 +742,52 @@ php artisan make:test --pest {name}
 php artisan test --compact
 php artisan test --compact --filter=testName
 ```
+
+---
+
+## Observability
+
+### Request ID Tracing
+
+Attach a request ID to every log line. This makes tracing a request as simple as filtering by one ID. Echo the ID back in the response so consumers can hand it to you when reporting problems.
+
+**Middleware:**
+
+```php
+<?php
+declare(strict_types=1);
+
+namespace App\Http\Middleware;
+
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
+use Symfony\Component\HttpFoundation\Response;
+
+final class AssignRequestId
+{
+    public function handle(Request $request, \Closure $next): Response
+    {
+        $requestId = $request->header('X-Request-ID') ?? Str::uuid7()->toString();
+
+        Log::withContext(['request_id' => $requestId]);
+
+        $response = $next($request);
+
+        $response->headers->set('X-Request-ID', $requestId);
+
+        return $response;
+    }
+}
+```
+
+**Register in bootstrap/app.php (Laravel 11+) or Kernel (Laravel < 11):**
+
+```php
+$middleware->push(AssignRequestId::class); // Or via Kernel $middleware stack
+```
+
+Now every log entry within a request shares one ID. A consumer reporting a problem can hand you the exact value to search for. One field, every relevant entry.
 
 **Rules:**
 - Test happy paths, failure paths, edge cases

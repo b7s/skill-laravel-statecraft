@@ -183,7 +183,7 @@ final readonly class InvoicePaid
 
 ### 5. Action Class Bridges Model and Infrastructure
 
-The action calls the model's transition method, persists with `save()` inside a DB transaction, and dispatches the event by default. Pass `$dispatchEvent = false` to suppress the event when needed (e.g., batch processing, re-imports).
+The action calls the model's transition method, persists with `save()` inside a DB transaction, and dispatches the event by default using `DB::afterCommit()`. Pass `$dispatchEvent = false` to suppress the event when needed (e.g., batch processing, re-imports).
 
 ```php
 <?php
@@ -202,7 +202,7 @@ final class MarkInvoicePaid
             $invoice->save();
 
             if ($dispatchEvent) {
-                event($event);
+                DB::afterCommit(fn () => event($event));
             }
 
             return $invoice;

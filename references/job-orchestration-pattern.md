@@ -216,6 +216,101 @@ public function retryUntil(): \DateTime
 }
 ```
 
+## Dispatching Events Inside Transactions
+
+Events dispatched inside a `DB::transaction()` may trigger listeners (and their downstream jobs) **before the transaction commits**. If the transaction later rolls back, those side effects fire against uncommitted (or rolled-back) data. Use `DB::afterCommit()` to defer event dispatch until the transaction actually commits.
+
+### Rule: Actions Use `DB::afterCommit()` for Their Own Domain Event
+
+Actions emit exactly one domain event — their own. They never dispatch jobs or events from other contexts. The `DB::afterCommit()` callback ensures the event only fires after the data is genuinely committed.
+
+```php
+final class MarkInvoicePaid
+{
+    public function __invoke(Invoice $invoice, string $paymentId, bool $dispatchEvent = true): Invoice
+    {
+        return DB::transaction(function () use ($invoice, $paymentId, $dispatchEvent): Invoice {
+            $event = $invoice->markPaid($paymentId);
+            $invoice->save();
+
+            if ($dispatchEvent) {
+                DB::afterCommit(fn () => event($event));
+            }
+
+            return $invoice;
+        });
+    }
+}
+```
+
+### Listeners Dispatch Jobs Normally
+
+Listeners run **after** the action's transaction commits (because the event was deferred via `DB::afterCommit()`). Listeners can dispatch jobs directly — no `afterCommit()` needed:
+
+```php
+final class OnInvoicePaidSendReceipt
+{
+    public function handle(InvoicePaid $event): void
+    {
+        SendReceiptEmail::dispatch($event->invoiceId);
+    }
+}
+```
+
+### Services Orchestrating Multiple Actions
+
+When a service calls multiple actions inside a transaction, each action's event is deferred by its own `DB::afterCommit()`. All events fire together after the outer transaction commits:
+
+```php
+final class InvoiceService
+{
+    public function createAndCharge(CreateInvoicePayload $payload): Invoice
+    {
+        return DB::transaction(function () use ($payload): Invoice {
+            $invoice = $this->createInvoice($payload);
+            $invoice = $this->markPaid($invoice, $payload->paymentId);
+
+            return $invoice;
+        });
+        // After this transaction commits, both InvoiceCreated and InvoicePaid events fire
+    }
+}
+```
+
+### `DB::afterCommit()` vs `->afterCommit()` on Job Dispatch
+
+| Mechanism | Scope | When to Use |
+|---|---|---|
+| `DB::afterCommit(fn () => ...)` | **Any code** inside a transaction — events, jobs, logs | Actions emitting domain events inside `DB::transaction()` |
+| `SomeJob::dispatch()->afterCommit()` | **Queued jobs only** | Jobs dispatched inside a transaction that read the written data |
+
+**Prefer `DB::afterCommit()` in actions** because actions emit domain events, not dispatch jobs directly. Jobs are dispatched by listeners or services.
+
+### When to Use `DB::afterCommit()`
+
+| Scenario | Use `DB::afterCommit()`? | Reason |
+|---|---|---|
+| Action emits domain event inside transaction | **Yes** | Event must only fire after data is committed |
+| Service calls actions inside a transaction | **Yes** (each action handles its own) | All events fire after outer commit |
+| Event dispatched outside any transaction | No | Nothing to wait for |
+| Listener dispatches a job | No | Listener already runs post-commit |
+
+### Testing `DB::afterCommit()` Events
+
+```php
+it('dispatches domain event after transaction commits', function () {
+    Event::fake([InvoicePaid::class]);
+    $invoice = Invoice::factory()->create(['status' => InvoiceStatus::Pending]);
+
+    $action = new MarkInvoicePaid();
+    $result = $action($invoice, 'pay_123');
+
+    Event::assertDispatched(InvoicePaid::class);
+});
+```
+
+---
+
 ## Cross-Context Coordination
 
 Use event listeners to trigger jobs in other contexts. See `integration-patterns.md` for the full pattern.
@@ -435,7 +530,7 @@ it('schedules timeout job for 7 days', function () {
 | No timeout | Jobs hang forever | Set `public int $timeout = 300;` |
 | Cross-context job calls | Hard coupling | Use events + listeners |
 | No state checks in delayed jobs | Process stale data | Check model state at job start |
-| Forgetting `afterCommit()` | Job runs before transaction commits | Chain `afterCommit()` when dispatching |
+| Forgetting `DB::afterCommit()` | Event fires before transaction commits | Use `DB::afterCommit(fn () => event(...))` in actions |
 | Missing `failed()` method | No cleanup on permanent failure | Implement `failed(\Throwable $e)` |
 
 ## Summary

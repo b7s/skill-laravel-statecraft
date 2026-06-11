@@ -250,6 +250,7 @@ class ErpShipmentController extends Controller
 
         $event = $this->translator->translate($request->all());
 
+        // Webhook controllers dispatch outside a transaction, so no afterCommit needed
         event($event);
 
         return response()->json(['status' => 'received']);

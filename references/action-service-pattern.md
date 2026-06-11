@@ -36,6 +36,12 @@ Actions live in `App\Actions\{Context}\` as a flat folder — one file per actio
 
 Each action does exactly one thing. No composition, no orchestration, no calling other actions.
 
+**Action signature rules:**
+- **Existing entity** — Pass the Eloquent model directly: `__invoke(Invoice $invoice, ...)`
+- **Creating an entity** — Pass a typed DTO (from `payload()`): `__invoke(CreateInvoicePayload $payload)`
+- **Primitives only** — When no model is involved: `__invoke(string $filePath, ...)`
+- **Never pass `array $data`** — Use a typed DTO instead. Arrays lose type safety, IDE support, and PHPStan coverage.
+
 ```php
 <?php
 declare(strict_types=1);
@@ -44,17 +50,18 @@ namespace App\Actions\Billing;
 
 use App\Models\Invoice;
 use App\Enums\Billing\InvoiceStatus;
+use App\Data\Billing\CreateInvoicePayload;
 
 final class CreateInvoice
 {
-    public function __invoke(array $data): Invoice
+    public function __invoke(CreateInvoicePayload $payload): Invoice
     {
-        return DB::transaction(function () use ($data): Invoice {
+        return DB::transaction(function () use ($payload): Invoice {
             return Invoice::query()->create([
-                'order_id' => $data['order_id'],
-                'amount_cents' => $data['amount_cents'],
-                'tax_amount_cents' => $data['tax_amount_cents'],
-                'total_cents' => $data['total_cents'],
+                'order_id' => $payload->orderId,
+                'amount_cents' => $payload->amountCents,
+                'tax_amount_cents' => $payload->taxAmountCents,
+                'total_cents' => $payload->totalCents,
                 'status' => InvoiceStatus::default(),
             ]);
         });
@@ -70,7 +77,7 @@ final class MarkInvoicePaid
             $invoice->save();
 
             if ($dispatchEvent) {
-                event($event);
+                DB::afterCommit(fn () => event($event));
             }
 
             return $invoice;
@@ -90,6 +97,30 @@ final class GenerateInvoicePdf
 }
 ```
 
+**BAD — Action receiving array:**
+
+```php
+final class CreateInvoice
+{
+    public function __invoke(array $data): Invoice
+    {
+        // $data['order_id'] — typo passes silently, no IDE support
+    }
+}
+```
+
+**GOOD — Action receiving typed DTO:**
+
+```php
+final class CreateInvoice
+{
+    public function __invoke(CreateInvoicePayload $payload): Invoice
+    {
+        // $payload->orderId — typed, IDE autocompletes, PHPStan validates
+    }
+}
+```
+
 **BAD — Action calling other actions:**
 
 ```php
@@ -101,15 +132,15 @@ final class CreateAndProcessInvoice
         private readonly SendInvoiceEmail $sendEmail,
     ) {}
 
-    public function __invoke(array $data): Invoice
+    public function __invoke(CreateInvoicePayload $payload): Invoice
     {
-        $invoice = $this->createInvoice($data);
+        $invoice = $this->createInvoice($payload);
         $pdfPath = $this->generatePdf($invoice);
         $this->sendEmail($invoice, $pdfPath);
 
         return $invoice;
     }
-}
+} 
 ```
 
 **GOOD — Service orchestrating actions:**
@@ -120,6 +151,7 @@ namespace App\Services\Billing;
 use App\Actions\Billing\CreateInvoice;
 use App\Actions\Billing\GenerateInvoicePdf;
 use App\Actions\Billing\SendInvoiceEmail;
+use App\Data\Billing\CreateInvoicePayload;
 use App\Models\Invoice;
 
 final class InvoiceService
@@ -130,9 +162,9 @@ final class InvoiceService
         private readonly SendInvoiceEmail $sendEmail,
     ) {}
 
-    public function createAndProcess(array $data): Invoice
+    public function createAndProcess(CreateInvoicePayload $payload): Invoice
     {
-        $invoice = $this->createInvoice($data);
+        $invoice = $this->createInvoice($payload);
         $pdfPath = $this->generatePdf($invoice);
         $this->sendEmail($invoice, $pdfPath);
 
@@ -156,6 +188,7 @@ namespace App\Services\Billing;
 use App\Actions\Billing\CreateInvoice;
 use App\Actions\Billing\MarkInvoicePaid;
 use App\Actions\Billing\GenerateInvoicePdf;
+use App\Data\Billing\CreateInvoicePayload;
 use App\Models\Invoice;
 
 final class InvoiceService
@@ -168,16 +201,17 @@ final class InvoiceService
         private readonly GenerateInvoicePdf $generatePdf,
     ) {}
 
-    public function createAndCharge(array $data): Invoice
+    public function createAndCharge(CreateInvoicePayload $payload): Invoice
     {
-        $taxAmount = $this->taxCalculator->calculate($data['amount_cents'], $data['country']);
+        $taxAmount = $this->taxCalculator->calculate($payload->amountCents, $payload->country);
 
-        $invoice = $this->createInvoice([
-            'order_id' => $data['order_id'],
-            'amount_cents' => $data['amount_cents'],
-            'tax_amount_cents' => $taxAmount,
-            'total_cents' => $data['amount_cents'] + $taxAmount,
-        ]);
+        $invoice = $this->createInvoice(new CreateInvoicePayload(
+            orderId: $payload->orderId,
+            amountCents: $payload->amountCents,
+            taxAmountCents: $taxAmount,
+            totalCents: $payload->amountCents + $taxAmount,
+            country: $payload->country,
+        ));
 
         $payment = $this->paymentGateway->charge($invoice->customer_id, $invoice->total_cents);
 
@@ -249,7 +283,7 @@ final class PaymentGateway
 
 ### 3. No HTTP Concerns Inside Actions
 
-Actions receive validated data as an array or DTO. They never receive `Request`, `FormRequest`, or any HTTP object.
+Actions receive Eloquent models or typed DTOs. They never receive `Request`, `FormRequest`, or any HTTP object.
 
 ```php
 // BAD
@@ -258,10 +292,16 @@ final class UpdateUser
     public function __invoke(UpdateUserRequest $request): User { /* ... */ }
 }
 
-// GOOD
+// BAD — array loses type safety
 final class UpdateUser
 {
     public function __invoke(array $data, User $user): User { /* ... */ }
+}
+
+// GOOD — typed DTO for creation/update data
+final class UpdateUser
+{
+    public function __invoke(UpdateUserPayload $payload, User $user): User { /* ... */ }
 }
 ```
 
@@ -300,9 +340,81 @@ final class UserController extends Controller
 {
     public function update(UpdateUserRequest $request, User $user, UpdateUser $action): RedirectResponse
     {
-        ($action)($request->validated(), $user);
+        ($action)($request->payload(), $user);
 
         return redirect()->back();
+    }
+}
+```
+
+#### The `payload()` Pattern
+
+A Form Request's job is not only to validate input — it is to turn that validated input into a **typed, immutable value object** the rest of your application can trust. Because `payload()` runs only after validation has passed, it can cast with confidence. Enum constructors won't throw because the rules already confirmed every value is a valid enum case.
+
+```php
+<?php
+declare(strict_types=1);
+
+namespace App\Http\Requests;
+
+use Illuminate\Foundation\Http\FormRequest;
+
+final class IssueKeyRequest extends FormRequest
+{
+    public function rules(): array
+    {
+        return [
+            'name' => ['required', 'string', 'max:255'],
+            'scopes' => ['required', 'array'],
+            'scopes.*' => ['string', 'in:' . implode(',', KeyScope::values())],
+            'expires_at' => ['nullable', 'date'],
+        ];
+    }
+
+    public function payload(): IssueKeyPayload
+    {
+        return new IssueKeyPayload(
+            name: $this->string('name')->toString(),
+            scopes: $this->collect('scopes')->map(KeyScope::from(...)),
+            expiresAt: filled($this->input('expires_at'))
+                ? \Carbon\CarbonImmutable::parse($this->string('expires_at')->toString())
+                : null,
+        );
+    }
+}
+```
+
+```php
+<?php
+declare(strict_types=1);
+
+namespace App\Data;
+
+final readonly class IssueKeyPayload
+{
+    /**
+     * @param  string  $name
+     * @param  \Illuminate\Support\Collection<int, KeyScope>  $scopes
+     * @param  \Carbon\CarbonImmutable|null  $expiresAt
+     */
+    public function __construct(
+        public string $name,
+        public iterable $scopes,
+        public ?\Carbon\CarbonImmutable $expiresAt,
+    ) {}
+}
+```
+
+The controller receives a typed payload and hands it to an action. The action works in domain types and never touches the request layer, which means it behaves identically whether called from a controller, a console command, a queue job, or a test.
+
+```php
+final class IssueKeyController extends Controller
+{
+    public function __invoke(IssueKeyRequest $request, IssueKey $action): KeyResource
+    {
+        $key = $action($request->payload());
+
+        return new KeyResource($key);
     }
 }
 ```
@@ -321,7 +433,7 @@ final class MarkInvoicePaid
             $invoice->save();
 
             if ($dispatchEvent) {
-                event($event);
+                DB::afterCommit(fn () => event($event));
             }
 
             return $invoice;
@@ -329,6 +441,33 @@ final class MarkInvoicePaid
     }
 }
 ```
+
+#### Events Inside Transactions Must Use `DB::afterCommit()`
+
+When an action dispatches its domain event inside a transaction, listeners and their downstream jobs may run **before the transaction commits**. If the transaction later rolls back, those side effects fire against uncommitted (or rolled-back) data. Use `DB::afterCommit()` to defer the event dispatch until the transaction actually commits:
+
+```php
+final class MarkInvoicePaid
+{
+    public function __invoke(Invoice $invoice, string $paymentId, bool $dispatchEvent = true): Invoice
+    {
+        return DB::transaction(function () use ($invoice, $paymentId, $dispatchEvent): Invoice {
+            $event = $invoice->markPaid($paymentId);
+            $invoice->save();
+
+            if ($dispatchEvent) {
+                DB::afterCommit(fn () => event($event));
+            }
+
+            return $invoice;
+        });
+    }
+}
+```
+
+**Rule:** Actions only emit their own domain event. They never dispatch jobs or events from other contexts. Listeners and services handle job dispatch — see `job-orchestration-pattern.md`.
+
+**Why `DB::afterCommit()` over `->afterCommit()` on jobs:** `DB::afterCommit()` is a database-level callback that runs after the transaction commits. It works for any code — events, jobs, logs. The `->afterCommit()` method on job dispatch only applies to queued jobs. Since actions emit domain events (not dispatch jobs directly), `DB::afterCommit()` is the correct mechanism.
 
 If you need multiple mutations, use a Service:
 
@@ -377,7 +516,7 @@ final class InvoiceController extends Controller
 {
     public function store(CreateInvoiceRequest $request, InvoiceService $service): RedirectResponse
     {
-        $invoice = $service->createAndProcess($request->validated());
+        $invoice = $service->createAndProcess($request->payload());
         return redirect()->route('invoices.show', $invoice);
     }
 }
@@ -394,7 +533,7 @@ final class InvoiceController extends Controller
         GenerateInvoicePdf $generatePdf,
         SendInvoiceEmail $sendEmail,
     ): RedirectResponse {
-        $invoice = $createInvoice($request->validated());
+        $invoice = $createInvoice($request->payload());
         $pdfPath = $generatePdf($invoice);
         $sendEmail($invoice, $pdfPath);
 
@@ -403,16 +542,65 @@ final class InvoiceController extends Controller
 }
 ```
 
+#### Single-Action Invokable Controllers (APIs)
+
+For API-centric Laravel applications, every controller should be a **single-action invokable class**. One class, one `__invoke` method, one responsibility. `IssueKeyController` tells you exactly what it does. `KeyController` tells you almost nothing.
+
+```php
+<?php
+declare(strict_types=1);
+
+namespace App\Http\Controllers\Keys;
+
+final class IssueKeyController extends Controller
+{
+    public function __invoke(IssueKeyRequest $request, IssueKey $action): KeyResource
+    {
+        $key = $action($request->payload());
+
+        return new KeyResource($key);
+    }
+}
+```
+
+Reference controllers as a class, never a closure, because closures cannot be route-cached and a class reference is testable and navigable in your editor.
+
+```php
+// routes/api.php
+
+use App\Http\Controllers\Keys\IssueKeyController;
+
+$actualVersion = 'v1';
+
+Route::prefix($actualVersion)->post('/keys', IssueKeyController::class);
+
+Route::group(['prefix' => $actualVersion], static function (): void {
+    Route::post('/webhook/xxxx', SomeClass::class)
+        ->name('some.name');
+
+    Route::post('/token/connect', [AuthController::class, 'connect'])->name('token.connect');
+});
+```
+
+Namespace controllers under versioned API namespaces to make the version boundary visible in code:
+
+```
+App\Http\Controllers\Keys\V1\IssueKeyController
+App\Http\Controllers\Keys\V2\IssueKeyController
+```
+
+When v2 arrives it lives in `Keys\V2`, the v1 controller stays exactly as it is, and you physically cannot put v2 logic in a v1 controller because the boundary is visible in the code.
+
 ### 7. Actions Return Results
 
 ```php
 // Write — returns the created/updated model
 final class SaveInvoice
 {
-    public function __invoke(array $data): Invoice { /* ... */ }
+    public function __invoke(SaveInvoicePayload $payload): Invoice { /* ... */ }
 }
 
-// Read — returns collection or paginator
+// Read — returns collection or paginator (filters can be array since they're read-only query params)
 final class ListInvoices
 {
     public function __invoke(array $filters, int $perPage = 15): LengthAwarePaginator
@@ -488,21 +676,22 @@ final class OrderCheckoutService
         private readonly InventoryChecker $inventoryChecker,
     ) {}
 
-    public function checkout(array $data): Order
+    public function checkout(CreateOrderPayload $payload): Order
     {
-        $taxAmount = $this->taxCalculator->calculate($data['amount_cents'], $data['country']);
-        $hasStock = $this->inventoryChecker->check($data['items']);
+        $taxAmount = $this->taxCalculator->calculate($payload->amountCents, $payload->country);
+        $hasStock = $this->inventoryChecker->check($payload->items);
 
         if (!$hasStock) {
             throw new InsufficientStockException();
         }
 
-        $order = $this->createOrder([
-            'customer_id' => $data['customer_id'],
-            'amount_cents' => $data['amount_cents'],
-            'tax_amount_cents' => $taxAmount,
-            'status' => OrderStatus::Pending,
-        ]);
+        $order = $this->createOrder(new CreateOrderPayload(
+            customerId: $payload->customerId,
+            amountCents: $payload->amountCents,
+            taxAmountCents: $taxAmount,
+            country: $payload->country,
+            items: $payload->items,
+        ));
 
         SendOrderConfirmationEmail::dispatch($order->id);
         NotifyWarehouse::dispatch($order->id);
@@ -647,6 +836,16 @@ final class ProcessCustomerImport implements ShouldQueue
 ## Directory Structure
 
 ```
+app/Data/
+├── Billing/
+│   ├── CreateInvoicePayload.php
+│   └── SaveInvoicePayload.php
+├── Fulfillment/
+│   └── CreateShipmentPayload.php
+└── User/
+    ├── RegisterUserPayload.php
+    └── UpdateUserPayload.php
+
 app/Actions/
 ├── Billing/
 │   ├── CreateInvoice.php
@@ -670,7 +869,7 @@ app/Actions/
     └── DeleteUser.php
 ```
 
-Flat folder per context. No subfolders beyond the context.
+Flat folder per context. No subfolders beyond the context. Payload DTOs live in `app/Data/{Context}/` as `readonly class` objects.
 
 ## Naming Convention
 
@@ -686,6 +885,7 @@ Flat folder per context. No subfolders beyond the context.
 | Notify | `Send{What}Notification` | `SendWelcomeEmail` |
 | Workflow start | `Start{Workflow}` | `StartShipmentWorkflow` |
 | ACL translate | `Translate{Source}` | `TranslateErpShipment` |
+| Payload DTO | `{Action}Payload` | `CreateInvoicePayload`, `UpdateUserPayload` |
 
 ## Testing
 
@@ -733,11 +933,13 @@ it('rolls back on failure', function () {
 
 | Pitfall | Why It Hurts | Solution |
 |---|---|---|
-| Action receives Request object | Not reusable from console/jobs/other services | Accept array or DTO |
+| Action receives Request object | Not reusable from console/jobs/other services | Accept Eloquent model or typed DTO |
+| Action receives `array $data` | No type safety, typos pass silently, no IDE support | Use typed DTO (`CreateInvoicePayload`) |
 | Action validates input | Duplicates Form Request validation | Let Form Request validate |
 | Action calls other actions | Violates Single Responsibility; should be service | Extract to Service |
-| Action dispatches jobs | Two responsibilities (execute + schedule) | Service dispatches jobs; actions dispatch domain events only |
+| Action dispatches jobs | Two responsibilities (execute + schedule) | Service dispatches jobs; actions emit domain events only via `DB::afterCommit()` |
 | No DB transaction | Partial writes on failure | Wrap in `DB::transaction()` |
+| Event dispatched inside transaction without `DB::afterCommit()` | Listeners fire before commit; stale data on rollback | Use `DB::afterCommit(fn () => event($event))` |
 | Querying another context's model directly | Hard coupling across bounded contexts | Use integration patterns |
 | HTTP concerns in action | Not reusable from non-HTTP layers | Keep logout, session, redirect in controller |
 | Subfolders inside Actions/ | Unnecessary complexity | Flat folder; IDEs handle 100+ files |

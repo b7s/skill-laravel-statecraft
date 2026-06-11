@@ -42,6 +42,10 @@ Contexts communicate through **explicit integration patterns** (Customer/Supplie
 10. **Test Everything** — Every action, transition, and listener requires Pest tests.
 11. **Database Safety** — Tests must always run against a dedicated test database. Never run against the user's development or production database.
 12. **Quality Gates Are Mandatory** — Run `./vendor/bin/pest --parallel` and `./vendor/bin/catraca` after every change.
+13. **Errors Have One Shape** — All API errors return RFC 9457 Problem+JSON. Domain exceptions map to informative 422s, not generic 500s.
+14. **Audit Before Side Effects** — State-changing actions write append-only audit records inside the transaction, before dispatching jobs or events.
+15. **Jobs Respect Transaction Boundaries** — Events dispatched inside `DB::transaction()` use `DB::afterCommit()` so they only fire after the data is committed.
+16. **Request Tracing Is Non-Negotiable** — Every API route runs `X-Request-ID` middleware.
 
 ## Why Bounded Contexts?
 
@@ -51,39 +55,44 @@ See `references/bounded-context-pattern.md` for the full breakdown.
 
 ## Request Flow
 
-```
-HTTP Request → Route → FormRequest (validation) → Controller
-                                                         ↓
-                                              ┌──────────┴──────────┐
-                                              │                      │
-                                         [SIMPLE]               [COMPLEX]
-                                              │                      │
-                                              ↓                      ↓
-                                           Action            Service → Actions
-                                              │                      │
-                                              ↓                      ↓
-                                         Model.transition()    Model.transition()
-                                         DB::transaction()     DB::transaction()
-                                              │                      │
-                                              ↓                      ↓
-                                         Returns result /      Dispatches event
-                                         Dispatches event            │
-                                              │                      │
-                                              └──────────┬───────────┘
-                                                         ↓
-                                                   HTTP Response
-```
+**HTTP Request** → **Route** → **FormRequest** (validation) → **Controller**
+
+From the controller, two paths diverge:
+
+**Simple path:** Controller → Action → `Model.transition()` inside `DB::transaction()` → `AuditLog::create()` → `DB::afterCommit(fn() => event(...))` → HTTP Response
+
+**Complex path:** Controller → Service → multiple Actions → each Action runs `Model.transition()` inside `DB::transaction()` → `AuditLog::create()` → `DB::afterCommit(fn() => event(...))` → Service dispatches Jobs → HTTP Response
+
+Both paths converge: every state-changing action writes an audit record inside the transaction, then emits its domain event only after commit via `DB::afterCommit()`.
 
 ### Simple Path — Controller calls Action directly
 
 ```php
-// Controller
-class InvoiceController extends Controller
+// Controller (single-action invokable)
+class PayInvoiceController extends Controller
 {
-    public function pay(PayInvoiceRequest $request, Invoice $invoice, MarkInvoicePaid $action)
+    public function __invoke(PayInvoiceRequest $request, Invoice $invoice, MarkInvoicePaid $action)
     {
-        $invoice = $action($invoice, $request->validated('payment_id'));
+        $invoice = $action($invoice, $request->payload()->paymentId);
         return new InvoiceResource($invoice);
+    }
+}
+
+// Form Request with payload()
+final class PayInvoiceRequest extends FormRequest
+{
+    public function rules(): array
+    {
+        return [
+            'payment_id' => ['required', 'string'],
+        ];
+    }
+
+    public function payload(): PayInvoicePayload
+    {
+        return new PayInvoicePayload(
+            paymentId: $this->string('payment_id')->toString(),
+        );
     }
 }
 
@@ -96,8 +105,18 @@ final class MarkInvoicePaid
             $event = $invoice->markPaid($paymentId);
             $invoice->save();
 
+            AuditLog::query()->create([
+                'event_type' => 'invoice.paid',
+                'auditable_type' => Invoice::class,
+                'auditable_id' => $invoice->id,
+                'actor_type' => Auth::user() ? User::class : 'system',
+                'actor_id' => Auth::id() ?? 'scheduler',
+                'context' => ['payment_id' => $paymentId, 'amount_cents' => $invoice->amount_cents],
+                'occurred_at' => now(),
+            ]);
+
             if ($dispatchEvent) {
-                event($event);
+                DB::afterCommit(fn () => event($event));
             }
 
             return $invoice;
@@ -129,7 +148,7 @@ class InvoiceController extends Controller
 {
     public function store(CreateInvoiceRequest $request, InvoiceService $service)
     {
-        $invoice = $service->createAndProcess($request->validated());
+        $invoice = $service->createAndProcess($request->payload());
         return new InvoiceResource($invoice);
     }
 }
@@ -143,11 +162,11 @@ final class InvoiceService
         private readonly GenerateInvoicePdf $generatePdf,
     ) {}
 
-    public function createAndProcess(array $data): Invoice
+    public function createAndProcess(CreateInvoicePayload $payload): Invoice
     {
-        $taxAmount = $this->taxCalculator->calculate($data['amount_cents'], $data['country']);
+        $taxAmount = $this->taxCalculator->calculate($payload->amountCents, $payload->country);
 
-        $invoice = $this->createInvoice([...]);
+        $invoice = $this->createInvoice($payload);
         $invoice = $this->markPaid($invoice, $payment->id);
         $this->generatePdf($invoice);
 
@@ -298,6 +317,11 @@ See `references/quality-gates.md` for complete testing patterns.
 | 11 | Code Style | Laravel Pint formatted |
 | 12 | Quality Metrics | b7s/catraca passes |
 | 13 | Automated | Run after every change |
+| 14 | Error Consistency | RFC 9457 Problem+JSON for all API errors |
+| 15 | Audit Trail | State-changing actions write append-only audit records |
+| 16 | Transaction Safety | Events inside transactions use `DB::afterCommit()` |
+| 17 | Request Tracing | X-Request-ID middleware on all API routes |
+| 18 | API Versioning | Versioned from day one (`/v1/` prefix) |
 
 ## Stop Conditions
 
@@ -310,8 +334,10 @@ See `references/quality-gates.md` for complete testing patterns.
 - `references/bounded-context-pattern.md` — God entities, context isolation
 - `references/cross-context-comments.md` — Inline comment conventions
 - `references/integration-patterns.md` — Customer/Supplier, ACL, shared primitives
-- `references/action-service-pattern.md` — Actions + Services, sync vs async
+- `references/action-service-pattern.md` — Actions + Services, sync vs async, payload pattern, invokable controllers
 - `references/state-machine-pattern.md` — Model transitions, enums, events
-- `references/job-orchestration-pattern.md` — Chains, batches, retry logic
-- `references/php-rules.md` — PHP/Laravel coding standards
+- `references/job-orchestration-pattern.md` — Chains, batches, retry logic, afterCommit
+- `references/audit-log-pattern.md` — Append-only audit records, actor tracking, JSONB context
+- `references/api-patterns.md` — Idempotency keys, route versioning, Sunset headers
+- `references/php-rules.md` — PHP/Laravel coding standards, RFC 9457 error responses, request tracing
 - `references/quality-gates.md` — Testing, PHPStan, Pint, Catraca
