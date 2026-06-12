@@ -666,9 +666,11 @@ vendor/bin/pint --dirty --format agent
 ### Tests (Pest Required)
 ```bash
 php artisan make:test --pest {name}
-php artisan test --compact
-php artisan test --compact --filter=testName
+php artisan test --compact --parallel
+php artisan test --compact --parallel --filter=testName
 ```
+
+Run tests in parallel: `./vendor/bin/pest --parallel` (It doesn't work for browser tests)
 
 ---
 

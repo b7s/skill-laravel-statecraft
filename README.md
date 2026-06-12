@@ -55,7 +55,7 @@ Bounded Contexts are a domain concept. All contexts live in one monolith. Micros
 ### Mandatory Quality Gates
 
 Every feature requires:
-- **Tests** — Pest tests for all actions, transitions, and event listeners
+- **Tests** — Pest tests for all actions, transitions, and event listeners (always run tests in parallel: `./vendor/bin/pest --parallel`)
 - **Static Analysis** — PHPStan level 6 compliance (change if you want)
 - **Code Style** — Laravel Pint formatting
 - **Quality Metrics** — b7s/catraca checks for Security, DRY, SRP violations

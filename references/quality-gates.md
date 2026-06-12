@@ -49,7 +49,7 @@ Auto-fixes indentation, import ordering, trailing commas, blank lines before ret
 ./vendor/bin/pest --parallel
 ```
 
-Verifies all tests pass, no regressions introduced, new features are covered. **If tests fail:** Fix the code or update the tests. Never skip failing tests.
+Verifies all tests pass, no regressions are introduced, new features are covered. **If tests fail:** Fix the code or update the tests. Never skip failing tests.
 
 ### Step 3: Static Analysis
 
