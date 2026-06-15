@@ -3,7 +3,7 @@ name: laravel-statecraft
 description: >
   Laravel/PHP backend skill that enforces the Bounded Context + State Machine +
   Job Orchestration pattern for bulletproof business logic. Uses standard Laravel directory
-  conventions (app/Models, app/Actions, app/Enums, app/Events). Bounded Contexts own their
+  conventions (app/Models, app/Actions, app/Data, app/Enums). Bounded Contexts own their
   models and invariants, state machines enforce transitions within each context, Laravel jobs
   orchestrate side effects. Mandatory testing with Pest, PHPStan level 6, Laravel Pint, and
   b7s/catraca quality gates.
@@ -32,7 +32,7 @@ Contexts communicate through **explicit integration patterns** (Customer/Supplie
 
 1. **Bounded Contexts Are the First Boundary** — Split before you share.
 2. **Eloquent Models Own Transitions** — No status checks in controllers or services.
-3. **Events Are Facts** — Transitions return domain events. Actions dispatch them by default; the model does NOT dispatch them.
+3. **Events Are Facts** — Transitions return Data DTOs. Actions dispatch them by default; the model does NOT dispatch them.
 4. **Side Effects Belong to Jobs** — Email, SMS, API calls happen in queued jobs.
 5. **Use Laravel Primitives** — Share string IDs and int amounts. Custom casts only when complex.
 6. **Async Is First-Class** — Model waiting with job delays and event listeners.
@@ -60,9 +60,9 @@ See `references/bounded-context-pattern.md` for the full breakdown.
 
 From the controller, two paths diverge:
 
-**Simple path:** Controller → Action → `Model.transition()` inside `DB::transaction()` (save happens in the model) → `AuditLog::record($event)` → `DB::afterCommit(fn() => event(...))` → HTTP Response
+**Simple path:** Controller → Action → `Model.transition()` inside `DB::transaction()` (save happens in the model) → `Audit::record('event.name', $model, [...])` → `DB::afterCommit(fn() => event(...))` → HTTP Response
 
-**Complex path:** Controller → Service → multiple Actions → each Action runs `Model.transition()` inside `DB::transaction()` (save happens in the model) → `AuditLog::record($event)` → `DB::afterCommit(fn() => event(...))` → Service dispatches Jobs → HTTP Response
+**Complex path:** Controller → Service → multiple Actions → each Action runs `Model.transition()` inside `DB::transaction()` (save happens in the model) → `Audit::record('event.name', $model, [...])` → `DB::afterCommit(fn() => event(...))` → Service dispatches Jobs → HTTP Response
 
 Both paths converge: every state-changing action writes an audit record inside the transaction, then emits its domain event only after commit via `DB::afterCommit()`.
 
@@ -105,16 +105,17 @@ final class PayInvoiceRequest extends FormRequest
 // Action
 final class MarkInvoicePaid
 {
-    public function __invoke(Invoice $invoice, string $paymentId, bool $dispatchEvent = true): Invoice
+    public function __invoke(Invoice $invoice, string $paymentId): Invoice
     {
-        return DB::transaction(function () use ($invoice, $paymentId, $dispatchEvent): Invoice {
-            $event = $invoice->markPaid($paymentId);
+        return DB::transaction(function () use ($invoice, $paymentId): Invoice {
+            $data = $invoice->markPaid($paymentId);
 
-            AuditLog::record($event);
+            Audit::record('invoice.paid', $invoice, [
+                'order_id' => $invoice->order_id,
+                'payment_id' => $paymentId,
+            ]);
 
-            if ($dispatchEvent) {
-                DB::afterCommit(static fn () => event($event));
-            }
+            DB::afterCommit(static fn () => event($data));
 
             return $invoice;
         });
@@ -124,7 +125,7 @@ final class MarkInvoicePaid
 // Model
 class Invoice extends Model
 {
-    public function markPaid(string $paymentId): InvoicePaid
+    public function markPaid(string $paymentId): InvoicePaidPayload
     {
         if ($this->status !== InvoiceStatus::Pending) {
             throw new InvalidTransitionException('Cannot pay from this status');
@@ -134,7 +135,7 @@ class Invoice extends Model
         $this->payment_id = $paymentId;
         $this->save();
 
-        return new InvoicePaid($this->id, $this->order_id, $paymentId, now());
+        return InvoicePaidPayload::fromEvent($this, $paymentId);
     }
 }
 ```
@@ -190,9 +191,7 @@ See `references/action-service-pattern.md` for full rules, sync vs async, naming
 app/
 ├── Models/                          # Eloquent models with transition methods
 ├── Enums/{Context}/                 # Status enums (one per context)
-├── Events/
-│   ├── DomainEvent.php # Abstract base class (entityId + occurredAt)
-│   └── {Context}/      # Concrete events extending DomainEvent
+├── Data/{Context}/                  # Typed DTOs — input payloads + event data
 ├── Exceptions/                      # Typed exceptions
 ├── Actions/{Context}/               # One action per file, flat folder
 ├── Listeners/{Context}/             # Event listeners
@@ -215,8 +214,8 @@ Models contain transition methods that validate state, change it, return a domai
 ```php
 class Invoice extends Model
 {
-    public function markPaid(string $paymentId): InvoicePaid { /* ... */ }
-    public function cancel(): InvoiceCancelled { /* ... */ }
+    public function markPaid(string $paymentId): InvoicePaidPayload { /* ... */ }
+    public function cancel(): InvoiceCancelledPayload { /* ... */ }
 }
 ```
 
@@ -264,10 +263,10 @@ Cross-context relationships documented in code: `references/cross-context-commen
 
 ## Connecting the Patterns
 
-1. A bounded context defines its own model + enum + events.
-2. The model's transition method validates state, changes it, returns a domain event.
-3. The action calls the transition (which persists internally via `$this->save()`), records the audit log, and dispatches the event by default.
-4. A listener starts a job chain in response.
+1. A bounded context defines its own model + enum + Data DTOs.
+2. The model's transition method validates state, changes it, returns a Data DTO.
+3. The action calls the transition (which persists internally via `$this->save()`), records the audit log via `Audit::record()`, and dispatches the Data DTO via `DB::afterCommit(fn () => event(...))` by default.
+4. A listener starts a job chain in response to the dispatched Data DTO.
 
 ## Mandatory Quality Gates
 
@@ -304,12 +303,12 @@ See `references/quality-gates.md` for complete testing patterns.
 
 | # | Gate | Rule |
 |---|---|---|
-| 1 | Context Isolation | Each context owns models, enums, events |
+| 1 | Context Isolation | Each context owns models, enums, Data DTOs |
 | 2 | Integration Correctness | Customer/Supplier or shared primitives |
 | 3 | Status Type Safety | Enum with `default()` method |
 | 4 | Transition Ownership | Status checks in model only |
 | 5 | Side Effect Purity | No emails/API calls in model methods |
-| 6 | Event Explicitness | Transitions return events; actions dispatch by default |
+| 6 | Event Explicitness | Transitions return Data DTOs; actions dispatch by default |
 | 7 | Action Consistency | One action per file, DB transactions, no HTTP |
 | 8 | Test Coverage | Every action, transition, listener tested |
 | 9 | Database Safety | Tests run on a dedicated test database only |
@@ -336,7 +335,7 @@ See `references/quality-gates.md` for complete testing patterns.
 - `references/cross-context-comments.md` — Inline comment conventions
 - `references/integration-patterns.md` — Customer/Supplier, ACL, shared primitives
 - `references/action-service-pattern.md` — Actions + Services, sync vs async, payload pattern, invokable controllers
-- `references/state-machine-pattern.md` — Model transitions, enums, DomainEvent base class, events
+- `references/state-machine-pattern.md` — Model transitions, enums, Data DTOs
 - `references/job-orchestration-pattern.md` — Chains, batches, retry logic, afterCommit
 - `references/audit-log-pattern.md` — Append-only audit records, actor tracking, JSONB context
 - `references/api-patterns.md` — Problem+JSON error responses, idempotency keys, route versioning, Sunset headers

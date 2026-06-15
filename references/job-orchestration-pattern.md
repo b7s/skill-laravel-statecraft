@@ -126,7 +126,7 @@ class ProcessUnpaidInvoice implements ShouldQueue
             return;
         }
 
-        $cancelInvoice($invoice, dispatchEvent: false);
+        $cancelInvoice($invoice);
 
         SendCancellationEmail::dispatch($invoice);
     }
@@ -138,14 +138,14 @@ class ProcessUnpaidInvoice implements ShouldQueue
 ```php
 namespace App\Listeners\Billing;
 
-use App\Events\Billing\InvoiceCreated;
+use App\Data\Billing\InvoiceCreatedPayload;
 use App\Jobs\Billing\ProcessUnpaidInvoice;
 
 class OnInvoiceCreatedScheduleTimeout
 {
-    public function handle(InvoiceCreated $event): void
+    public function handle(InvoiceCreatedPayload $data): void
     {
-        ProcessUnpaidInvoice::dispatch($event->invoiceId)
+        ProcessUnpaidInvoice::dispatch($data->invoiceId)
             ->delay(now()->addDays(7));
     }
 }
@@ -227,14 +227,12 @@ Actions emit exactly one domain event — their own. They never dispatch jobs or
 ```php
 final class MarkInvoicePaid
 {
-    public function __invoke(Invoice $invoice, string $paymentId, bool $dispatchEvent = true): Invoice
+    public function __invoke(Invoice $invoice, string $paymentId): Invoice
     {
-        return DB::transaction(function () use ($invoice, $paymentId, $dispatchEvent): Invoice {
-            $event = $invoice->markPaid($paymentId);
+        return DB::transaction(function () use ($invoice, $paymentId): Invoice {
+            $data = $invoice->markPaid($paymentId);
 
-            if ($dispatchEvent) {
-                DB::afterCommit(static fn () => event($event));
-            }
+            DB::afterCommit(static fn () => event($data));
 
             return $invoice;
         });
@@ -249,9 +247,9 @@ Listeners run **after** the action's transaction commits (because the event was 
 ```php
 final class OnInvoicePaidSendReceipt
 {
-    public function handle(InvoicePaid $event): void
+    public function handle(InvoicePaidPayload $data): void
     {
-        SendReceiptEmail::dispatch($event->invoiceId);
+        SendReceiptEmail::dispatch($data->invoiceId);
     }
 }
 ```
@@ -271,7 +269,7 @@ final class InvoiceService
 
             return $invoice;
         });
-        // After this transaction commits, both InvoiceCreated and InvoicePaid events fire
+        // After this transaction commits, both InvoiceCreatedPayload and InvoicePaidPayload DTOs fire
     }
 }
 ```
@@ -297,14 +295,14 @@ final class InvoiceService
 ### Testing `DB::afterCommit()` Events
 
 ```php
-it('dispatches domain event after transaction commits', function () {
-    Event::fake([InvoicePaid::class]);
+it('dispatches Data DTO after transaction commits', function () {
+    Event::fake([InvoicePaidPayload::class]);
     $invoice = Invoice::factory()->create(['status' => InvoiceStatus::Pending]);
 
     $action = new MarkInvoicePaid();
     $result = $action($invoice, 'pay_123');
 
-    Event::assertDispatched(InvoicePaid::class);
+    Event::assertDispatched(InvoicePaidPayload::class);
 });
 ```
 
@@ -321,7 +319,7 @@ Use event listeners to trigger jobs in other contexts. See `integration-patterns
 
 namespace App\Listeners\Fulfillment;
 
-use App\Events\Billing\InvoicePaid;
+use App\Data\Billing\InvoicePaidPayload;
 use App\Jobs\Fulfillment\RouteShipment;
 use App\Jobs\Fulfillment\NotifyWarehouse;
 use App\Jobs\Fulfillment\TrackShipment;
@@ -329,12 +327,12 @@ use Illuminate\Support\Facades\Bus;
 
 class OnInvoicePaidStartShipment
 {
-    public function handle(InvoicePaid $event): void
+    public function handle(InvoicePaidPayload $data): void
     {
         Bus::chain([
-            new RouteShipment($event->orderId),
-            new NotifyWarehouse($event->orderId),
-            new TrackShipment($event->orderId),
+            new RouteShipment($data->orderId),
+            new NotifyWarehouse($data->orderId),
+            new TrackShipment($data->orderId),
         ])
         ->onQueue('fulfillment')
         ->dispatch();
@@ -345,7 +343,7 @@ class OnInvoicePaidStartShipment
 **Registration in EventServiceProvider:**
 ```php
 protected $listen = [
-    \App\Events\Billing\InvoicePaid::class => [
+    \App\Data\Billing\InvoicePaidPayload::class => [
         \App\Listeners\Fulfillment\OnInvoicePaidStartShipment::class,
     ],
 ];
@@ -358,7 +356,7 @@ protected $listen = [
 
 namespace App\Listeners\Compliance;
 
-use App\Events\Billing\InvoiceCreated;
+use App\Data\Billing\InvoiceCreatedPayload;
 use App\Jobs\Compliance\CheckCustomerRisk;
 use App\Jobs\Compliance\CheckOrderRisk;
 use App\Jobs\Compliance\CheckPaymentRisk;
@@ -366,17 +364,17 @@ use Illuminate\Support\Facades\Bus;
 
 class OnInvoiceCreatedStartComplianceReview
 {
-    public function handle(InvoiceCreated $event): void
+    public function handle(InvoiceCreatedPayload $data): void
     {
         Bus::batch([
-            new CheckCustomerRisk($event->customerId),
-            new CheckOrderRisk($event->orderId),
-            new CheckPaymentRisk($event->paymentMethod),
+            new CheckCustomerRisk($data->customerId),
+            new CheckOrderRisk($data->orderId),
+            new CheckPaymentRisk($data->paymentMethod),
         ])
-        ->then(function (Batch $batch) use ($event) {
-            FinalizeComplianceReview::dispatch($event->invoiceId);
+        ->then(function (Batch $batch) use ($data) {
+            FinalizeComplianceReview::dispatch($data->invoiceId);
         })
-        ->name("compliance-review-{$event->invoiceId}")
+        ->name("compliance-review-{$data->invoiceId}")
         ->dispatch();
     }
 }
@@ -425,7 +423,7 @@ class InvoicePaymentService
     }
 }
 
-// The MarkInvoicePaid action dispatches InvoicePaid by default.
+// The MarkInvoicePaid action dispatches InvoicePaidPayload by default.
 // No manual event() call needed in the service.
 ```
 
@@ -455,17 +453,22 @@ it('dispatches receipt email job', function () {
 <?php
 
 use App\Listeners\Fulfillment\OnInvoicePaidStartShipment;
-use App\Events\Billing\InvoicePaid;
+use App\Data\Billing\InvoicePaidPayload;
 use App\Jobs\Fulfillment\RouteShipment;
 use App\Jobs\Fulfillment\NotifyWarehouse;
 use Illuminate\Support\Facades\Bus;
 
 it('dispatches shipment job chain', function () {
     Bus::fake();
-    $event = new InvoicePaid(1, 'ord_123', 'pay_123', now());
+    $data = new InvoicePaidPayload(
+        invoiceId: '1',
+        orderId: 'ord_123',
+        paymentId: 'pay_123',
+        paidAt: now(),
+    );
 
     $listener = new OnInvoicePaidStartShipment();
-    $listener->handle($event);
+    $listener->handle($data);
 
     Bus::assertChained([
         RouteShipment::class,
@@ -480,16 +483,21 @@ it('dispatches shipment job chain', function () {
 <?php
 
 use App\Listeners\Compliance\OnInvoiceCreatedStartComplianceReview;
-use App\Events\Billing\InvoiceCreated;
+use App\Data\Billing\InvoiceCreatedPayload;
 use App\Jobs\Compliance\CheckCustomerRisk;
 use Illuminate\Support\Facades\Bus;
 
 it('dispatches compliance check batch', function () {
     Bus::fake();
-    $event = new InvoiceCreated(1, 'cust_123', 'ord_123');
+    $data = new InvoiceCreatedPayload(
+        invoiceId: '1',
+        customerId: 'cust_123',
+        orderId: 'ord_123',
+        paymentMethod: 'card',
+    );
 
     $listener = new OnInvoiceCreatedStartComplianceReview();
-    $listener->handle($event);
+    $listener->handle($data);
 
     Bus::assertBatched(function ($batch) {
         return $batch->jobs->contains(fn ($job) => $job instanceof CheckCustomerRisk);
@@ -503,16 +511,21 @@ it('dispatches compliance check batch', function () {
 <?php
 
 use App\Listeners\Billing\OnInvoiceCreatedScheduleTimeout;
-use App\Events\Billing\InvoiceCreated;
+use App\Data\Billing\InvoiceCreatedPayload;
 use App\Jobs\Billing\ProcessUnpaidInvoice;
 use Illuminate\Support\Facades\Bus;
 
 it('schedules timeout job for 7 days', function () {
     Bus::fake();
-    $event = new InvoiceCreated(1, 'cust_123', 'ord_123');
+    $data = new InvoiceCreatedPayload(
+        invoiceId: '1',
+        customerId: 'cust_123',
+        orderId: 'ord_123',
+        paymentMethod: 'card',
+    );
 
     $listener = new OnInvoiceCreatedScheduleTimeout();
-    $listener->handle($event);
+    $listener->handle($data);
 
     Bus::assertDispatched(ProcessUnpaidInvoice::class, function ($job) {
         return $job->delay->greaterThan(now()->addDays(6));

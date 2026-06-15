@@ -60,8 +60,8 @@ declare(strict_types=1);
 namespace App\Models;
 
 use App\Enums\Billing\InvoiceStatus;
-use App\Events\Billing\InvoicePaid;
-use App\Events\Billing\InvoiceCancelled;
+use App\Data\Billing\InvoicePaidPayload;
+use App\Data\Billing\InvoiceCancelledPayload;
 use App\Exceptions\InvalidTransitionException;
 
 class Invoice extends Model
@@ -73,7 +73,7 @@ class Invoice extends Model
         return ['status' => InvoiceStatus::class];
     }
 
-    public function markPaid(string $paymentId): InvoicePaid
+    public function markPaid(string $paymentId): InvoicePaidPayload
     {
         if ($this->status !== InvoiceStatus::Pending) {
             throw new InvalidTransitionException(
@@ -85,15 +85,10 @@ class Invoice extends Model
         $this->payment_id = $paymentId;
         $this->save();
 
-        return new InvoicePaid(
-            invoiceId: $this->id,
-            orderId: $this->order_id,
-            paymentId: $paymentId,
-            paidAt: new \DateTimeImmutable(),
-        );
+        return InvoicePaidPayload::fromEvent($this, $paymentId);
     }
 
-    public function cancel(): InvoiceCancelled
+    public function cancel(): InvoiceCancelledPayload
     {
         if ($this->status === InvoiceStatus::Paid) {
             throw new InvalidTransitionException('Cannot cancel a paid invoice.');
@@ -102,11 +97,7 @@ class Invoice extends Model
         $this->status = InvoiceStatus::Cancelled;
         $this->save();
 
-        return new InvoiceCancelled(
-            invoiceId: $this->id,
-            orderId: $this->order_id,
-            cancelledAt: new \DateTimeImmutable(),
-        );
+        return InvoiceCancelledPayload::fromEvent($this);
     }
 }
 ```
@@ -119,7 +110,7 @@ if ($order->status === 'pending') { $order->status = 'approved'; }
 // BAD: Status changed directly
 $order->status = InvoiceStatus::Paid;
 
-// BAD: No event returned
+// BAD: No Data DTO returned
 $invoice->markPaid('pay_123'); // returns void
 
 // BAD: Side effect inside transition method
@@ -134,7 +125,7 @@ $invoice->warehouse_id = 'wh_01'; // That's Fulfillment's concern
 - Transition methods call `$this->save()` before returning the event. The action never calls `->save()` on the model.
 - No facades (`Mail::`, `Event::`, `Cache::`, `DB::`) inside transition methods. `save()` is allowed — it is model persistence, not a facade.
 - No cross-context model references. Reference by ID only.
-- Domain events live in `app/Events/{Context}/`.
+- Data DTOs live in `app/Data/{Context}/`.
 - Exceptions live in `app/Exceptions/`.
 
 ### 3. Use Typed Exceptions
@@ -155,128 +146,86 @@ final class InvalidTransitionException extends \DomainException {}
 ├── InvalidStateException
 └── BusinessRuleViolationException
 ```
-### 4. Domain Events Extend a Shared Base Class
+### 4. Data DTOs Carry Event Information
 
-Every domain event shares the same core: an entity ID and a timestamp. Instead of repeating these fields in every event class, extend an abstract `DomainEvent` base class. This eliminates duplication **and** gives the audit log and generic consumers a stable contract to work against.
-
-**Base class** — lives in `app/Events/DomainEvent.php`:
-
-```php
-<?php
-
-declare(strict_types=1);
-
-namespace App\Events;
-
-abstract readonly class DomainEvent
-{
-    public function __construct(
-        public readonly int $entityId,
-        public readonly \DateTimeImmutable $occurredAt,
-    ) {}
-
-    public function eventType(): string
-    {
-        return static::class;
-    }
-
-    abstract public function entityType(): string;
-
-    public function auditContext(): array
-    {
-        return [];
-    }
-}
-```
-
-**Concrete events** — each event only declares its context-specific fields. The shared `entityId` and `occurredAt` come from the base class:
-
-```php
-<?php
-
-declare(strict_types=1);
-
-namespace App\Events\Billing;
-
-use App\Events\DomainEvent;
-use App\Models\Invoice;
-
-final readonly class InvoicePaid extends DomainEvent
-{
-    public function __construct(
-        int $invoiceId,
-        public readonly string $orderId,
-        public readonly string $paymentId,
-        \DateTimeImmutable $paidAt,
-    ) {
-        parent::__construct($invoiceId, $paidAt);
-    }
-
-    public function entityType(): string
-    {
-        return Invoice::class;
-    }
-
-    public function auditContext(): array
-    {
-        return [
-            'order_id' => $this->orderId,
-            'payment_id' => $this->paymentId,
-        ];
-    }
-}
-```
-
-```php
-<?php
-
-declare(strict_types=1);
-
-namespace App\Events\Billing;
-
-use App\Events\DomainEvent;
-use App\Models\Invoice;
-
-final readonly class InvoiceCancelled extends DomainEvent
-{
-    public function __construct(
-        int $invoiceId,
-        public readonly string $orderId,
-        \DateTimeImmutable $cancelledAt,
-    ) {
-        parent::__construct($invoiceId, $cancelledAt);
-    }
-
-    public function entityType(): string
-    {
-        return Invoice::class;
-    }
-
-    public function auditContext(): array
-    {
-        return [
-            'order_id' => $this->orderId,
-        ];
-    }
-}
-```
+Every domain transition emits a Data DTO that carries the information downstream listeners need. Instead of extending a shared base class, each DTO is a plain `readonly class` with its own constructor. A `fromEvent()` factory method centralises construction so that the model transition method needs only one line.
 
 **Rules:**
-- All domain events extend `DomainEvent`. Never create a standalone event class.
-- Child events only declare context-specific constructor parameters + call `parent::__construct(entityId, occurredAt)`.
-- `entityType()` is abstract — each event declares which model it belongs to.
-- `auditContext()` returns event-specific data for the audit log. Override when the event carries context beyond the entity ID.
-- `eventType()` returns the FQCN by default. Override for custom dot-notation strings like `'invoice.paid'`.
-- Use `readonly class` or `readonly` properties. `final readonly class` extending `abstract readonly class` is valid in PHP 8.2+.
+- Data DTOs live in `app/Data/{Context}/`. They are **readonly data carriers** — no behaviour, no side effects.
+- One DTO per transition. `InvoicePaidPayload` is correct. `InvoiceStatusChangedData` is wrong.
 - Include only data needed by listeners/workflow steps — not the entire model state.
 - Never include infrastructure objects (Request, Response, Eloquent models).
-- One event per transition. `InvoicePaid` is correct. `InvoiceStatusChanged` is wrong.
-- Listeners access typed properties directly (`$event->paymentId`). Never use `auditContext()` in listeners — it exists for the audit log only.
+- Use a `fromEvent()` static factory to construct the DTO from the domain model.
+- Listeners access typed properties directly (`$data->paymentId`).
+- No base class, no abstract methods, no interface required — any `event()` dispatchable object works.
 
-**What this unlocks:** The action no longer manually constructs `event_type`, `auditable_type`, `auditable_id`, and `occurred_at` for the audit log — those come from the event itself. See section 5 for the simplified audit log write.
+```php
+<?php
+
+declare(strict_types=1);
+
+namespace App\Data\Billing;
+
+use App\Models\Invoice;
+use DateTimeImmutable;
+
+final readonly class InvoicePaidPayload
+{
+    public function __construct(
+        public string $invoiceId,
+        public string $orderId,
+        public string $paymentId,
+        public DateTimeImmutable $paidAt,
+    ) {}
+
+    public static function fromEvent(Invoice $invoice, string $paymentId): self
+    {
+        return new self(
+            invoiceId: (string) $invoice->id,
+            orderId: $invoice->order_id,
+            paymentId: $paymentId,
+            paidAt: new DateTimeImmutable(),
+        );
+    }
+}
+```
+
+```php
+<?php
+
+declare(strict_types=1);
+
+namespace App\Data\Billing;
+
+use App\Models\Invoice;
+use DateTimeImmutable;
+
+final readonly class InvoiceCancelledPayload
+{
+    public function __construct(
+        public string $invoiceId,
+        public string $orderId,
+        public DateTimeImmutable $cancelledAt,
+    ) {}
+
+    public static function fromEvent(Invoice $invoice): self
+    {
+        return new self(
+            invoiceId: (string) $invoice->id,
+            orderId: $invoice->order_id,
+            cancelledAt: new DateTimeImmutable(),
+        );
+    }
+}
+```
+
+**What this unlocks:**
+- The model transition returns the DTO, which the action dispaches. No base class, no interface, no ceremony.
+- The audit log is recorded separately via `Audit::record()` — the DTO is not coupled to persistence.
+- Adding a new transition means creating a new Data DTO file and updating the model — no additional wiring.
 ### 5. Action Class Bridges Model and Infrastructure
 
-The action calls the model's transition method (which persists internally), records the audit log from the event, and dispatches the event by default using `DB::afterCommit()`. Pass `$dispatchEvent = false` to suppress the event when needed (e.g., batch processing, re-imports).
+The action calls the model's transition method (which persists internally), records the audit log separately from the Data DTO, and dispatches the Data DTO unconditionally via `DB::afterCommit()`.
 
 ```php
 <?php
@@ -290,16 +239,16 @@ use Illuminate\Support\Facades\DB;
 
 final class MarkInvoicePaid
 {
-    public function __invoke(Invoice $invoice, string $paymentId, bool $dispatchEvent = true): Invoice
+    public function __invoke(Invoice $invoice, string $paymentId): Invoice
     {
-        return DB::transaction(function () use ($invoice, $paymentId, $dispatchEvent): Invoice {
-            $event = $invoice->markPaid($paymentId);
+        return DB::transaction(function () use ($invoice, $paymentId): Invoice {
+            $data = $invoice->markPaid($paymentId);
 
-            AuditLog::record($event);
+            Audit::record('invoice.paid', $invoice, [
+                'payment_id' => $paymentId,
+            ]);
 
-            if ($dispatchEvent) {
-                DB::afterCommit(static fn () => event($event));
-            }
+            DB::afterCommit(static fn () => event($data));
 
             return $invoice;
         });
@@ -307,13 +256,9 @@ final class MarkInvoicePaid
 }
 ```
 
-Because the transition method calls `save()` internally and `AuditLog::record()` derives every field from the event, the action body is three lines: transition, audit, dispatch. Override the actor defaults when the action runs outside an HTTP context:
+The action body is four lines: transition, audit, dispatch, return. Audit and event dispatch are fully decoupled — the Data DTO only carries data for downstream listeners, not metadata for persistence.
 
-```php
-AuditLog::record($event, actorType: 'system', actorId: 'scheduler');
-```
-
-**Service – Call action that's dispatch the event:**
+**Service – Call action that dispatches the Data DTO:**
 
 ```php
 namespace App\Services\Billing;
@@ -331,7 +276,7 @@ final class InvoicePaymentService
 }
 ```
 
-**Suppressing the event when needed (e.g., batch processing):**
+**Actions always dispatch the Data DTO:**
 
 ```php
 namespace App\Services\Billing;
@@ -344,7 +289,7 @@ final class InvoiceBatchService
 
     public function processBatch(Invoice $invoice, string $paymentId): Invoice
     {
-        return $this->markPaid($invoice, $paymentId, dispatchEvent: false);
+        return $this->markPaid($invoice, $paymentId);
     }
 }
 ```
@@ -353,7 +298,7 @@ See `action-service-pattern.md` for the full action/service rules.
 
 ### 6. Testing
 
-Test transition methods in isolation. They do not touch the database — they validate state, mutate properties, and return events.
+Test transition methods in isolation. They do not touch the database — they validate state, mutate properties, and return Data DTOs.
 
 ```php
 <?php
@@ -366,10 +311,10 @@ use App\Exceptions\InvalidTransitionException;
 it('can be paid from pending', function () {
     $invoice = Invoice::factory()->create(['status' => InvoiceStatus::Pending->value]);
 
-    $event = $invoice->markPaid('pay_123');
+    $data = $invoice->markPaid('pay_123');
 
     expect($invoice->status)->toBe(InvoiceStatus::Paid)
-        ->and($event->paymentId)->toBe('pay_123');
+        ->and($data->paymentId)->toBe('pay_123');
 });
 
 it('cannot be paid from draft', function () {
@@ -423,7 +368,7 @@ it('marks invoice as paid through the action', function () {
 | Status checks in controllers | Business rules leak to HTTP layer | Move to model transition method |
 | Side effects in transition method | Untestable; hidden dependencies | Extract to action or workflow step |
 | Generic exceptions | Callers cannot distinguish failures | Typed exceptions |
-| `StatusChanged` events | Forces listeners to re-implement transition logic | Named transition events (`InvoicePaid`) |
+| `StatusChangedPayload` DTO | Forces listeners to re-implement transition logic | Named Data DTOs (`InvoicePaidPayload`) |
 | Model references another context's data | Hard coupling; cannot evolve independently | Reference by ID via Shared Primitives |
 
 ## Directory Structure
@@ -435,11 +380,9 @@ app/Models/
 app/Enums/Billing/
 └── InvoiceStatus.php
 
-app/Events/
-├── DomainEvent.php
-└── Billing/
-    ├── InvoicePaid.php
-    └── InvoiceCancelled.php
+app/Data/Billing/
+├── InvoicePaidPayload.php
+└── InvoiceCancelledPayload.php
 
 app/Exceptions/
 └── InvalidTransitionException.php

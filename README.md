@@ -68,7 +68,7 @@ Every feature requires:
 app/
 ├── Models/                      # Eloquent models with transition methods
 ├── Enums/{Context}/             # Status enums (one per context per model)
-├── Events/{Context}/            # Domain events
+├── Data/{Context}/              # Read-only Data DTOs (input payloads + event data)
 ├── Exceptions/                  # Typed exceptions
 ├── Actions/{Context}/           # One action per file, flat folder
 ├── Listeners/{Context}/         # Event listeners

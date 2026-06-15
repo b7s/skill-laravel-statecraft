@@ -70,14 +70,12 @@ final class CreateInvoice
 
 final class MarkInvoicePaid
 {
-    public function __invoke(Invoice $invoice, string $paymentId, bool $dispatchEvent = true): Invoice
+    public function __invoke(Invoice $invoice, string $paymentId): Invoice
     {
-        return DB::transaction(function () use ($invoice, $paymentId, $dispatchEvent): Invoice {
-            $event = $invoice->markPaid($paymentId);
+        return DB::transaction(function () use ($invoice, $paymentId): Invoice {
+            $data = $invoice->markPaid($paymentId);
 
-            if ($dispatchEvent) {
-                DB::afterCommit(static fn () => event($event));
-            }
+            DB::afterCommit(static fn () => event($data));
 
             return $invoice;
         });
@@ -521,14 +519,12 @@ Actions that mutate state wrap their operation in `DB::transaction()`. No nested
 ```php
 final class MarkInvoicePaid
 {
-    public function __invoke(Invoice $invoice, string $paymentId, bool $dispatchEvent = true): Invoice
+    public function __invoke(Invoice $invoice, string $paymentId): Invoice
     {
-        return DB::transaction(function () use ($invoice, $paymentId, $dispatchEvent): Invoice {
-            $event = $invoice->markPaid($paymentId);
+        return DB::transaction(function () use ($invoice, $paymentId): Invoice {
+            $data = $invoice->markPaid($paymentId);
 
-            if ($dispatchEvent) {
-                DB::afterCommit(static fn () => event($event));
-            }
+            DB::afterCommit(static fn () => event($data));
 
             return $invoice;
         });
@@ -543,14 +539,12 @@ When an action dispatches its domain event inside a transaction, listeners and t
 ```php
 final class MarkInvoicePaid
 {
-    public function __invoke(Invoice $invoice, string $paymentId, bool $dispatchEvent = true): Invoice
+    public function __invoke(Invoice $invoice, string $paymentId): Invoice
     {
-        return DB::transaction(function () use ($invoice, $paymentId, $dispatchEvent): Invoice {
-            $event = $invoice->markPaid($paymentId);
+        return DB::transaction(function () use ($invoice, $paymentId): Invoice {
+            $data = $invoice->markPaid($paymentId);
 
-            if ($dispatchEvent) {
-                DB::afterCommit(static fn () => event($event));
-            }
+            DB::afterCommit(static fn () => event($data));
 
             return $invoice;
         });
@@ -962,7 +956,7 @@ app/Actions/
     └── DeleteUser.php
 ```
 
-Flat folder per context. No subfolders beyond the context. Payload DTOs live in `app/Data/{Context}/` as `readonly class` objects.
+Flat folder per context. No subfolders beyond the context. All Data DTOs live in `app/Data/{Context}/` as `readonly class` objects. Input payloads use a descriptive verb+noun name (e.g. `CreateInvoicePayload`). Event data uses a past-tense verb+Payload suffix (e.g. `InvoicePaidPayload`).
 
 ## Naming Convention
 
@@ -1032,7 +1026,7 @@ it('rolls back on failure', function () {
 | Action calls other actions | Violates Single Responsibility; should be service | Extract to Service |
 | Action dispatches jobs | Two responsibilities (execute + schedule) | Service dispatches jobs; actions emit domain events only via `DB::afterCommit()` |
 | No DB transaction | Partial writes on failure | Wrap in `DB::transaction()` |
-| Event dispatched inside transaction without `DB::afterCommit()` | Listeners fire before commit; stale data on rollback | Use `DB::afterCommit(static fn () => event($event))` |
+| Event dispatched inside transaction without `DB::afterCommit()` | Listeners fire before commit; stale data on rollback | Use `DB::afterCommit(static fn () => event($data))` |
 | Querying another context's model directly | Hard coupling across bounded contexts | Use integration patterns |
 | HTTP concerns in action | Not reusable from non-HTTP layers | Keep logout, session, redirect in controller |
 | Subfolders inside Actions/ | Unnecessary complexity | Flat folder; IDEs handle 100+ files |

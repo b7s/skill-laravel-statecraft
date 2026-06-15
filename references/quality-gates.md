@@ -100,11 +100,11 @@ use App\Exceptions\InvalidTransitionException;
 it('can be paid from pending status', function () {
     $invoice = Invoice::factory()->create(['status' => InvoiceStatus::Pending]);
 
-    $event = $invoice->markPaid('pay_123');
+    $data = $invoice->markPaid('pay_123');
 
     expect($invoice->status)->toBe(InvoiceStatus::Paid)
-        ->and($invoice->payment_id)->toBe('pay_123');
-        ->and($event->paymentId)->toBe('pay_123');
+        ->and($invoice->payment_id)->toBe('pay_123')
+        ->and($data->paymentId)->toBe('pay_123');
 });
 
 it('cannot be paid from draft status', function () {
@@ -148,29 +148,29 @@ it('marks invoice as paid', function () {
     ]);
 });
 
-it('dispatches the correct event', function () {
+it('dispatches the correct Data DTO', function () {
     $invoice = Invoice::factory()->create(['status' => InvoiceStatus::Pending]);
 
-    Event::fake([InvoicePaid::class]);
+    Event::fake([InvoicePaidPayload::class]);
     $action = new MarkInvoicePaid();
     $result = $action($invoice, 'pay_123');
 
     Event::assertDispatched(
-        InvoicePaid::class,
-        fn (InvoicePaid $event) => $event->invoiceId === $result->id,
+        InvoicePaidPayload::class,
+        fn (InvoicePaidPayload $data) => $data->invoiceId === (string) $result->id,
     );
 });
 
-it('skips event dispatch when dispatchEvent is false', function () {
+it('dispatches the Data DTO unconditionally', function () {
     $invoice = Invoice::factory()->create(['status' => InvoiceStatus::Pending]);
 
-    Event::fake([InvoicePaid::class]);
+    Event::fake([InvoicePaidPayload::class]);
     $action = new MarkInvoicePaid();
-    $result = $action($invoice, 'pay_123', dispatchEvent: false);
+    $result = $action($invoice, 'pay_123');
 
     expect($result->status)->toBe(InvoiceStatus::Paid);
 
-    Event::assertNotDispatched(InvoicePaid::class);
+    Event::assertDispatched(InvoicePaidPayload::class);
 });
 
 it('rolls back transaction on failure', function () {
@@ -196,22 +196,22 @@ it('rolls back transaction on failure', function () {
 <?php
 
 use App\Listeners\Fulfillment\OnInvoicePaidStartShipment;
-use App\Events\Billing\InvoicePaid;
+use App\Data\Billing\InvoicePaidPayload;
 use App\Jobs\Fulfillment\RouteShipment;
 use App\Jobs\Fulfillment\NotifyWarehouse;
 use Illuminate\Support\Facades\Bus;
 
 it('dispatches shipment job chain', function () {
     Bus::fake();
-    $event = new InvoicePaid(
-        invoiceId: 1,
+    $data = new InvoicePaidPayload(
+        invoiceId: '1',
         orderId: 'ord_123',
         paymentId: 'pay_123',
         paidAt: now()
     );
 
     $listener = new OnInvoicePaidStartShipment();
-    $listener->handle($event);
+    $listener->handle($data);
 
     Bus::assertChained([
         RouteShipment::class,

@@ -25,7 +25,7 @@ The upstream context (Supplier) publishes domain events. The downstream context 
 
 ### Rules
 
-1. **The Supplier defines the event contract.** Events live in `app/Events/{Context}/`.
+1. **The Supplier defines the event contract.** Data DTOs live in `app/Data/{Context}/`.
 2. **The Customer subscribes.** Listeners live in `app/Listeners/{Context}/`.
 3. **Event contracts are versioned.** Breaking changes require a new event class name.
 4. **Events carry only what the Customer needs.** Not the entire model state.
@@ -34,38 +34,33 @@ The upstream context (Supplier) publishes domain events. The downstream context 
 
 ### Example
 ```php
-// app/Events/Billing/InvoicePaid.php — SUPPLIER publishes
+// app/Data/Billing/InvoicePaidPayload.php — SUPPLIER publishes
 <?php
 
 declare(strict_types=1);
 
-namespace App\Events\Billing;
+namespace App\Data\Billing;
 
-use App\Events\DomainEvent;
 use App\Models\Invoice;
+use DateTimeImmutable;
 
-final readonly class InvoicePaid extends DomainEvent
+final readonly class InvoicePaidPayload
 {
     public function __construct(
-        int $invoiceId,
+        public string $invoiceId,
         public string $orderId,
         public string $paymentId,
-        \DateTimeImmutable $paidAt,
-    ) {
-        parent::__construct($invoiceId, $paidAt);
-    }
+        public DateTimeImmutable $paidAt,
+    ) {}
 
-    public function entityType(): string
+    public static function fromEvent(Invoice $invoice, string $paymentId): self
     {
-        return Invoice::class;
-    }
-
-    public function auditContext(): array
-    {
-        return [
-            'order_id' => $this->orderId,
-            'payment_id' => $this->paymentId,
-        ];
+        return new self(
+            invoiceId: (string) $invoice->id,
+            orderId: $invoice->order_id,
+            paymentId: $paymentId,
+            paidAt: new DateTimeImmutable(),
+        );
     }
 }
 ```
@@ -85,7 +80,7 @@ final class InvoicePaymentService
 }
 ```
 
-The `MarkInvoicePaid` action dispatches the `InvoicePaid` event by default. The service no longer needs to dispatch it manually.
+The `MarkInvoicePaid` action dispatches `InvoicePaidPayload` by default. The service no longer needs to dispatch it manually.
 
 ```php
 // app/Listeners/Fulfillment/OnInvoicePaidStartShipment.php — CUSTOMER subscribes
@@ -94,7 +89,7 @@ declare(strict_types=1);
 
 namespace App\Listeners\Fulfillment;
 
-use App\Events\Billing\InvoicePaid;
+use App\Data\Billing\InvoicePaidPayload;
 use App\Jobs\Fulfillment\RouteShipment;
 use App\Jobs\Fulfillment\NotifyWarehouse;
 use App\Jobs\Fulfillment\TrackShipment;
@@ -102,12 +97,12 @@ use Illuminate\Support\Facades\Bus;
 
 final class OnInvoicePaidStartShipment
 {
-    public function handle(InvoicePaid $event): void
+    public function handle(InvoicePaidPayload $data): void
     {
         Bus::chain([
-            new RouteShipment($event->orderId),
-            new NotifyWarehouse($event->orderId),
-            new TrackShipment($event->orderId),
+            new RouteShipment($data->orderId),
+            new NotifyWarehouse($data->orderId),
+            new TrackShipment($data->orderId),
         ])->dispatch();
     }
 }
@@ -118,7 +113,7 @@ final class OnInvoicePaidStartShipment
 ```php
 // App\Providers\EventServiceProvider
 protected $listen = [
-    \App\Events\Billing\InvoicePaid::class => [
+    \App\Data\Billing\InvoicePaidPayload::class => [
         \App\Listeners\Fulfillment\OnInvoicePaidStartShipment::class,
     ],
 ];
@@ -221,14 +216,14 @@ declare(strict_types=1);
 
 namespace App\Infrastructure\Fulfillment\ACL;
 
-use App\Events\Fulfillment\ShipmentDispatched;
+use App\Data\Fulfillment\ShipmentDispatchedPayload;
 use App\Enums\Fulfillment\Carrier;
 
 final class ErpShipmentTranslator
 {
-    public function translate(array $erpPayload): ShipmentDispatched
+    public function translate(array $erpPayload): ShipmentDispatchedPayload
     {
-        return new ShipmentDispatched(
+        return new ShipmentDispatchedPayload(
             shipmentId: $erpPayload['order_num'],
             carrier: $this->translateCarrier($erpPayload['carrier_code']),
             trackingCode: $erpPayload['tracking'],
@@ -266,10 +261,10 @@ class ErpShipmentController extends Controller
             'tracking' => 'required|string',
         ]);
 
-        $event = $this->translator->translate($request->all());
+        $data = $this->translator->translate($request->all());
 
         // Webhook controllers dispatch outside a transaction, so no afterCommit needed
-        event($event);
+        event($data);
 
         return response()->json(['status' => 'received']);
     }
@@ -282,15 +277,15 @@ class ErpShipmentController extends Controller
 it('translates ERP shipment payload', function () {
     $translator = new ErpShipmentTranslator();
 
-    $event = $translator->translate([
+    $data = $translator->translate([
         'order_num' => 'ORD-123',
         'ship_date' => '2026-01-15',
         'carrier_code' => 'FDX',
         'tracking' => '1Z999AA1',
     ]);
 
-    expect($event->shipmentId)->toBe('ORD-123');
-    expect($event->carrier)->toBe(Carrier::FedEx);
+    expect($data->shipmentId)->toBe('ORD-123');
+    expect($data->carrier)->toBe(Carrier::FedEx);
 });
 ```
 

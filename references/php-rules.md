@@ -393,7 +393,7 @@ class ImportService
 | Services | `TaxCalculator`, `PricingEngine` |
 | Controllers | `InvoiceController` |
 | Jobs | `SendReceiptEmail`, `ProcessImport` |
-| Events | `InvoicePaid`, `UserCreated` |
+| Data DTOs | `InvoicePaidPayload`, `CreateInvoicePayload` |
 | Exceptions | `InvalidTransitionException` |
 | Interfaces | `PaymentProcessorInterface` |
 | Enums | `OrderStatus`, `PaymentStatus` |

@@ -46,7 +46,7 @@ class Invoice extends Model
 {
     protected $fillable = ['order_id', 'amount_cents', 'currency', 'status', 'payment_id'];
 
-    public function markPaid(string $paymentId): InvoicePaid { /* ... */ }
+    public function markPaid(string $paymentId): InvoicePaidPayload { /* ... */ }
 }
 
 // app/Models/Shipment.php — Fulfillment Context
@@ -54,7 +54,7 @@ class Shipment extends Model
 {
     protected $fillable = ['order_id', 'warehouse_id', 'tracking_code', 'status'];
 
-    public function dispatch(string $trackingCode): ShipmentDispatched { /* ... */ }
+    public function dispatch(string $trackingCode): ShipmentDispatchedPayload { /* ... */ }
 }
 
 // app/Models/ComplianceReview.php — Compliance Context
@@ -123,12 +123,12 @@ app/Enums/
 └── Compliance/
     └── ComplianceStatus.php
 
-app/Events/
+app/Data/
 ├── Billing/
-│   ├── InvoicePaid.php
-│   └── InvoiceCancelled.php
+│   ├── InvoicePaidPayload.php
+│   └── InvoiceCancelledPayload.php
 ├── Fulfillment/
-│   └── ShipmentDispatched.php
+│   └── ShipmentDispatchedPayload.php
 └── Shared/
     └── (shared event contracts, if any)
 
@@ -173,10 +173,10 @@ use App\Exceptions\InvalidTransitionException;
 it('marks invoice as paid', function () {
     $invoice = Invoice::factory()->create(['status' => InvoiceStatus::Pending->value]);
 
-    $event = $invoice->markPaid('pay_123');
+    $data = $invoice->markPaid('pay_123');
 
     expect($invoice->status)->toBe(InvoiceStatus::Paid);
-    expect($event->paymentId)->toBe('pay_123');
+    expect($data->paymentId)->toBe('pay_123');
 });
 
 it('cannot pay a paid invoice', function () {
