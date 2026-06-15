@@ -46,7 +46,7 @@ class Invoice extends Model
 {
     protected $fillable = ['order_id', 'amount_cents', 'currency', 'status', 'payment_id'];
 
-    public function markPaid(string $paymentId): InvoicePaidPayload { /* ... */ }
+    public function markPaid(string $paymentId): InvoicePaidData { /* ... */ }
 }
 
 // app/Models/Shipment.php — Fulfillment Context
@@ -54,7 +54,7 @@ class Shipment extends Model
 {
     protected $fillable = ['order_id', 'warehouse_id', 'tracking_code', 'status'];
 
-    public function dispatch(string $trackingCode): ShipmentDispatchedPayload { /* ... */ }
+    public function dispatch(string $trackingCode): ShipmentDispatchedData { /* ... */ }
 }
 
 // app/Models/ComplianceReview.php — Compliance Context
@@ -125,10 +125,10 @@ app/Enums/
 
 app/Data/
 ├── Billing/
-│   ├── InvoicePaidPayload.php
-│   └── InvoiceCancelledPayload.php
+│   ├── InvoicePaidData.php
+│   └── InvoiceCancelledData.php
 ├── Fulfillment/
-│   └── ShipmentDispatchedPayload.php
+│   └── ShipmentDispatchedData.php
 └── Shared/
     └── (shared event contracts, if any)
 

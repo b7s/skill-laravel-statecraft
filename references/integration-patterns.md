@@ -34,7 +34,7 @@ The upstream context (Supplier) publishes domain events. The downstream context 
 
 ### Example
 ```php
-// app/Data/Billing/InvoicePaidPayload.php — SUPPLIER publishes
+// app/Data/Billing/InvoicePaidData.php — SUPPLIER publishes
 <?php
 
 declare(strict_types=1);
@@ -44,7 +44,7 @@ namespace App\Data\Billing;
 use App\Models\Invoice;
 use DateTimeImmutable;
 
-final readonly class InvoicePaidPayload
+final readonly class InvoicePaidData
 {
     public function __construct(
         public string $invoiceId,
@@ -80,7 +80,7 @@ final class InvoicePaymentService
 }
 ```
 
-The `MarkInvoicePaid` action dispatches `InvoicePaidPayload` by default. The service no longer needs to dispatch it manually.
+The `MarkInvoicePaid` action dispatches `InvoicePaidData` by default. The service no longer needs to dispatch it manually.
 
 ```php
 // app/Listeners/Fulfillment/OnInvoicePaidStartShipment.php — CUSTOMER subscribes
@@ -89,7 +89,7 @@ declare(strict_types=1);
 
 namespace App\Listeners\Fulfillment;
 
-use App\Data\Billing\InvoicePaidPayload;
+use App\Data\Billing\InvoicePaidData;
 use App\Jobs\Fulfillment\RouteShipment;
 use App\Jobs\Fulfillment\NotifyWarehouse;
 use App\Jobs\Fulfillment\TrackShipment;
@@ -97,7 +97,7 @@ use Illuminate\Support\Facades\Bus;
 
 final class OnInvoicePaidStartShipment
 {
-    public function handle(InvoicePaidPayload $data): void
+    public function handle(InvoicePaidData $data): void
     {
         Bus::chain([
             new RouteShipment($data->orderId),
@@ -113,7 +113,7 @@ final class OnInvoicePaidStartShipment
 ```php
 // App\Providers\EventServiceProvider
 protected $listen = [
-    \App\Data\Billing\InvoicePaidPayload::class => [
+    \App\Data\Billing\InvoicePaidData::class => [
         \App\Listeners\Fulfillment\OnInvoicePaidStartShipment::class,
     ],
 ];
@@ -216,14 +216,14 @@ declare(strict_types=1);
 
 namespace App\Infrastructure\Fulfillment\ACL;
 
-use App\Data\Fulfillment\ShipmentDispatchedPayload;
+use App\Data\Fulfillment\ShipmentDispatchedData;
 use App\Enums\Fulfillment\Carrier;
 
 final class ErpShipmentTranslator
 {
-    public function translate(array $erpPayload): ShipmentDispatchedPayload
+    public function translate(array $erpPayload): ShipmentDispatchedData
     {
-        return new ShipmentDispatchedPayload(
+        return new ShipmentDispatchedData(
             shipmentId: $erpPayload['order_num'],
             carrier: $this->translateCarrier($erpPayload['carrier_code']),
             trackingCode: $erpPayload['tracking'],

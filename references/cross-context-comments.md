@@ -27,17 +27,17 @@ That's it. No paragraphs. No descriptions of what happens — the listener code 
 ```php
 protected $listen = [
     // [Billing → Fulfillment] Customer/Supplier
-    \App\Data\Billing\InvoicePaidPayload::class => [
+    \App\Data\Billing\InvoicePaidData::class => [
         \App\Listeners\Fulfillment\OnInvoicePaidStartShipment::class,
     ],
 
     // [Billing → Compliance] Customer/Supplier
-    \App\Data\Billing\InvoiceCreatedPayload::class => [
+    \App\Data\Billing\InvoiceCreatedData::class => [
         \App\Listeners\Compliance\OnInvoiceCreatedStartReview::class,
     ],
 
     // [Catalog → Billing] Customer/Supplier
-    \App\Data\Catalog\InventoryReservedPayload::class => [
+    \App\Data\Catalog\InventoryReservedData::class => [
         \App\Listeners\Billing\OnInventoryReservedProcessPayment::class,
     ],
 ];
@@ -60,9 +60,9 @@ class Invoice extends Model
 // [Legacy ERP → Fulfillment] ACL
 final class ErpShipmentTranslator
 {
-    public function translate(ErpShipmentWebhookData $data): ShipmentDispatchedPayload
+    public function translate(ErpShipmentWebhookData $data): ShipmentDispatchedData
     {
-        return new ShipmentDispatchedPayload(
+        return new ShipmentDispatchedData(
             shipmentId: $data->external_id,
             orderId: $data->reference_number,
             carrier: $data->carrier_name ?? 'unknown',

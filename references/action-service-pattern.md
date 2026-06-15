@@ -38,7 +38,7 @@ Each action does exactly one thing. No composition, no orchestration, no calling
 
 **Action signature rules:**
 - **Existing entity** — Pass the Eloquent model directly: `__invoke(Invoice $invoice, ...)`
-- **Creating an entity** — Pass a typed DTO (from `payload()`): `__invoke(CreateInvoicePayload $payload)`
+- **Creating an entity** — Pass a typed DTO (from `payload()`): `__invoke(CreateInvoiceData $payload)`
 - **Primitives only** — When no model is involved: `__invoke(string $filePath, ...)`
 - **Never pass `array $data`** — Use a typed DTO instead. Arrays lose type safety, IDE support, and PHPStan coverage.
 
@@ -50,11 +50,11 @@ namespace App\Actions\Billing;
 
 use App\Models\Invoice;
 use App\Enums\Billing\InvoiceStatus;
-use App\Data\Billing\CreateInvoicePayload;
+use App\Data\Billing\CreateInvoiceData;
 
 final class CreateInvoice
 {
-    public function __invoke(CreateInvoicePayload $payload): Invoice
+    public function __invoke(CreateInvoiceData $payload): Invoice
     {
         return DB::transaction(function () use ($payload): Invoice {
             return Invoice::query()->create([
@@ -111,7 +111,7 @@ final class CreateInvoice
 ```php
 final class CreateInvoice
 {
-    public function __invoke(CreateInvoicePayload $payload): Invoice
+    public function __invoke(CreateInvoiceData $payload): Invoice
     {
         // $payload->orderId — typed, IDE autocompletes, PHPStan validates
     }
@@ -129,7 +129,7 @@ final class CreateAndProcessInvoice
         private readonly SendInvoiceEmail $sendEmail,
     ) {}
 
-    public function __invoke(CreateInvoicePayload $payload): Invoice
+    public function __invoke(CreateInvoiceData $payload): Invoice
     {
         $invoice = $this->createInvoice($payload);
         $pdfPath = $this->generatePdf($invoice);
@@ -148,7 +148,7 @@ namespace App\Services\Billing;
 use App\Actions\Billing\CreateInvoice;
 use App\Actions\Billing\GenerateInvoicePdf;
 use App\Actions\Billing\SendInvoiceEmail;
-use App\Data\Billing\CreateInvoicePayload;
+use App\Data\Billing\CreateInvoiceData;
 use App\Models\Invoice;
 
 final class InvoiceService
@@ -159,7 +159,7 @@ final class InvoiceService
         private readonly SendInvoiceEmail $sendEmail,
     ) {}
 
-    public function createAndProcess(CreateInvoicePayload $payload): Invoice
+    public function createAndProcess(CreateInvoiceData $payload): Invoice
     {
         $invoice = $this->createInvoice($payload);
         $pdfPath = $this->generatePdf($invoice);
@@ -185,7 +185,7 @@ namespace App\Services\Billing;
 use App\Actions\Billing\CreateInvoice;
 use App\Actions\Billing\MarkInvoicePaid;
 use App\Actions\Billing\GenerateInvoicePdf;
-use App\Data\Billing\CreateInvoicePayload;
+use App\Data\Billing\CreateInvoiceData;
 use App\Models\Invoice;
 
 final class InvoiceService
@@ -198,11 +198,11 @@ final class InvoiceService
         private readonly GenerateInvoicePdf $generatePdf,
     ) {}
 
-    public function createAndCharge(CreateInvoicePayload $payload): Invoice
+    public function createAndCharge(CreateInvoiceData $payload): Invoice
     {
         $taxAmount = $this->taxCalculator->calculate($payload->amountCents, $payload->country);
 
-        $invoice = $this->createInvoice(new CreateInvoicePayload(
+        $invoice = $this->createInvoice(new CreateInvoiceData(
             orderId: $payload->orderId,
             amountCents: $payload->amountCents,
             taxAmountCents: $taxAmount,
@@ -298,7 +298,7 @@ final class UpdateUser
 // GOOD — typed DTO for creation/update data
 final class UpdateUser
 {
-    public function __invoke(UpdateUserPayload $payload, User $user): User { /* ... */ }
+    public function __invoke(UpdateUserData $payload, User $user): User { /* ... */ }
 }
 ```
 
@@ -374,9 +374,9 @@ final class IssueKeyRequest extends FormRequest
         ];
     }
 
-    public function payload(): IssueKeyPayload
+    public function payload(): IssueKeyData
     {
-        return new IssueKeyPayload(
+        return new IssueKeyData(
             name: $this->string('name')->toString(),
             scopes: $this->collect('scopes')->map(KeyScope::from(...)),
             expiresAt: filled($this->input('expires_at'))
@@ -393,7 +393,7 @@ declare(strict_types=1);
 
 namespace App\Data;
 
-final readonly class IssueKeyPayload
+final readonly class IssueKeyData
 {
     /**
      * @param  string  $name
@@ -432,7 +432,7 @@ declare(strict_types=1);
 
 namespace App\Http\Requests\Keys\V1;
 
-use App\Domain\Keys\Payloads\RevokeKeyPayload;
+use App\Data\Keys\RevokeKeyData;
 use Illuminate\Foundation\Http\FormRequest;
 
 final class RevokeKeyRequest extends FormRequest
@@ -449,9 +449,9 @@ final class RevokeKeyRequest extends FormRequest
         ];
     }
 
-    public function payload(): RevokeKeyPayload
+    public function payload(): RevokeKeyData
     {
-        return new RevokeKeyPayload(
+        return new RevokeKeyData(
             reason: $this->string('reason')->toString() ?: null,
         );
     }
@@ -463,9 +463,9 @@ final class RevokeKeyRequest extends FormRequest
 
 declare(strict_types=1);
 
-namespace App\Domain\Keys\Payloads;
+namespace App\Data\Keys;
 
-final readonly class RevokeKeyPayload
+final readonly class RevokeKeyData
 {
     public function __construct(
         public ?string $reason,
@@ -482,7 +482,7 @@ declare(strict_types=1);
 
 namespace App\Http\Requests\Keys\V1;
 
-use App\Domain\Keys\Payloads\RotateKeyPayload;
+use App\Data\Keys\RotateKeyData;
 use Illuminate\Foundation\Http\FormRequest;
 
 final class RotateKeyRequest extends FormRequest
@@ -500,9 +500,9 @@ final class RotateKeyRequest extends FormRequest
         ];
     }
 
-    public function payload(): RotateKeyPayload
+    public function payload(): RotateKeyData
     {
-        return new RotateKeyPayload(
+        return new RotateKeyData(
             gracePeriodHours: $this->integer('grace_period_hours', 24),
             requireAcknowledgement: $this->boolean('require_acknowledgement', true),
         );
@@ -684,7 +684,7 @@ When v2 arrives it lives in `Keys\V2`, the v1 controller stays exactly as it is,
 // Write — returns the created/updated model
 final class SaveInvoice
 {
-    public function __invoke(SaveInvoicePayload $payload): Invoice { /* ... */ }
+    public function __invoke(SaveInvoiceData $payload): Invoice { /* ... */ }
 }
 
 // Read — returns collection or paginator (filters can be array since they're read-only query params)
@@ -763,7 +763,7 @@ final class OrderCheckoutService
         private readonly InventoryChecker $inventoryChecker,
     ) {}
 
-    public function checkout(CreateOrderPayload $payload): Order
+    public function checkout(CreateOrderData $payload): Order
     {
         $taxAmount = $this->taxCalculator->calculate($payload->amountCents, $payload->country);
         $hasStock = $this->inventoryChecker->check($payload->items);
@@ -772,7 +772,7 @@ final class OrderCheckoutService
             throw new InsufficientStockException();
         }
 
-        $order = $this->createOrder(new CreateOrderPayload(
+        $order = $this->createOrder(new CreateOrderData(
             customerId: $payload->customerId,
             amountCents: $payload->amountCents,
             taxAmountCents: $taxAmount,
@@ -925,13 +925,13 @@ final class ProcessCustomerImport implements ShouldQueue
 ```
 app/Data/
 ├── Billing/
-│   ├── CreateInvoicePayload.php
-│   └── SaveInvoicePayload.php
+│   ├── CreateInvoiceData.php
+│   └── SaveInvoiceData.php
 ├── Fulfillment/
-│   └── CreateShipmentPayload.php
+│   └── CreateShipmentData.php
 └── User/
-    ├── RegisterUserPayload.php
-    └── UpdateUserPayload.php
+    ├── RegisterUserData.php
+    └── UpdateUserData.php
 
 app/Actions/
 ├── Billing/
@@ -956,7 +956,7 @@ app/Actions/
     └── DeleteUser.php
 ```
 
-Flat folder per context. No subfolders beyond the context. All Data DTOs live in `app/Data/{Context}/` as `readonly class` objects. Input payloads use a descriptive verb+noun name (e.g. `CreateInvoicePayload`). Event data uses a past-tense verb+Payload suffix (e.g. `InvoicePaidPayload`).
+Flat folder per context. No subfolders beyond the context. All Data DTOs live in `app/Data/{Context}/` as `readonly class` objects. Input Data DTOs use a descriptive verb+noun name (e.g. `CreateInvoiceData`). Event Data DTOs use a past-tense verb+Data suffix (e.g. `InvoicePaidData`).
 
 ## Naming Convention
 
@@ -972,7 +972,7 @@ Flat folder per context. No subfolders beyond the context. All Data DTOs live in
 | Notify | `Send{What}Notification` | `SendWelcomeEmail` |
 | Workflow start | `Start{Workflow}` | `StartShipmentWorkflow` |
 | ACL translate | `Translate{Source}` | `TranslateErpShipment` |
-| Payload DTO | `{Action}Payload` | `CreateInvoicePayload`, `UpdateUserPayload` |
+| Data DTO | `{Action}Data` | `CreateInvoiceData`, `UpdateUserData` |
 
 ## Testing
 
@@ -1021,7 +1021,7 @@ it('rolls back on failure', function () {
 | Pitfall | Why It Hurts | Solution |
 |---|---|---|
 | Action receives Request object | Not reusable from console/jobs/other services | Accept Eloquent model or typed DTO |
-| Action receives `array $data` | No type safety, typos pass silently, no IDE support | Use typed DTO (`CreateInvoicePayload`) |
+| Action receives `array $data` | No type safety, typos pass silently, no IDE support | Use typed DTO (`CreateInvoiceData`) |
 | Action validates input | Duplicates Form Request validation | Let Form Request validate |
 | Action calls other actions | Violates Single Responsibility; should be service | Extract to Service |
 | Action dispatches jobs | Two responsibilities (execute + schedule) | Service dispatches jobs; actions emit domain events only via `DB::afterCommit()` |

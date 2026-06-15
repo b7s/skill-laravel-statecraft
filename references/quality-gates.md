@@ -151,26 +151,26 @@ it('marks invoice as paid', function () {
 it('dispatches the correct Data DTO', function () {
     $invoice = Invoice::factory()->create(['status' => InvoiceStatus::Pending]);
 
-    Event::fake([InvoicePaidPayload::class]);
+    Event::fake([InvoicePaidData::class]);
     $action = new MarkInvoicePaid();
     $result = $action($invoice, 'pay_123');
 
     Event::assertDispatched(
-        InvoicePaidPayload::class,
-        fn (InvoicePaidPayload $data) => $data->invoiceId === (string) $result->id,
+        InvoicePaidData::class,
+        fn (InvoicePaidData $data) => $data->invoiceId === (string) $result->id,
     );
 });
 
 it('dispatches the Data DTO unconditionally', function () {
     $invoice = Invoice::factory()->create(['status' => InvoiceStatus::Pending]);
 
-    Event::fake([InvoicePaidPayload::class]);
+    Event::fake([InvoicePaidData::class]);
     $action = new MarkInvoicePaid();
     $result = $action($invoice, 'pay_123');
 
     expect($result->status)->toBe(InvoiceStatus::Paid);
 
-    Event::assertDispatched(InvoicePaidPayload::class);
+    Event::assertDispatched(InvoicePaidData::class);
 });
 
 it('rolls back transaction on failure', function () {
@@ -196,14 +196,14 @@ it('rolls back transaction on failure', function () {
 <?php
 
 use App\Listeners\Fulfillment\OnInvoicePaidStartShipment;
-use App\Data\Billing\InvoicePaidPayload;
+use App\Data\Billing\InvoicePaidData;
 use App\Jobs\Fulfillment\RouteShipment;
 use App\Jobs\Fulfillment\NotifyWarehouse;
 use Illuminate\Support\Facades\Bus;
 
 it('dispatches shipment job chain', function () {
     Bus::fake();
-    $data = new InvoicePaidPayload(
+    $data = new InvoicePaidData(
         invoiceId: '1',
         orderId: 'ord_123',
         paymentId: 'pay_123',

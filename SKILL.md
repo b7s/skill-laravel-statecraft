@@ -94,9 +94,9 @@ final class PayInvoiceRequest extends FormRequest
         ];
     }
 
-    public function payload(): PayInvoicePayload
+    public function payload(): PayInvoiceData
     {
-        return new PayInvoicePayload(
+        return new PayInvoiceData(
             paymentId: $this->string('payment_id')->toString(),
         );
     }
@@ -125,7 +125,7 @@ final class MarkInvoicePaid
 // Model
 class Invoice extends Model
 {
-    public function markPaid(string $paymentId): InvoicePaidPayload
+    public function markPaid(string $paymentId): InvoicePaidData
     {
         if ($this->status !== InvoiceStatus::Pending) {
             throw new InvalidTransitionException('Cannot pay from this status');
@@ -135,7 +135,7 @@ class Invoice extends Model
         $this->payment_id = $paymentId;
         $this->save();
 
-        return InvoicePaidPayload::fromEvent($this, $paymentId);
+        return InvoicePaidData::fromEvent($this, $paymentId);
     }
 }
 ```
@@ -161,7 +161,7 @@ final class InvoiceService
         private readonly GenerateInvoicePdf $generatePdf,
     ) {}
 
-    public function createAndProcess(CreateInvoicePayload $payload): Invoice
+    public function createAndProcess(CreateInvoiceData $payload): Invoice
     {
         $taxAmount = $this->taxCalculator->calculate($payload->amountCents, $payload->country);
 
@@ -214,8 +214,8 @@ Models contain transition methods that validate state, change it, return a domai
 ```php
 class Invoice extends Model
 {
-    public function markPaid(string $paymentId): InvoicePaidPayload { /* ... */ }
-    public function cancel(): InvoiceCancelledPayload { /* ... */ }
+    public function markPaid(string $paymentId): InvoicePaidData { /* ... */ }
+    public function cancel(): InvoiceCancelledData { /* ... */ }
 }
 ```
 

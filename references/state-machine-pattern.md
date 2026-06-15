@@ -60,8 +60,8 @@ declare(strict_types=1);
 namespace App\Models;
 
 use App\Enums\Billing\InvoiceStatus;
-use App\Data\Billing\InvoicePaidPayload;
-use App\Data\Billing\InvoiceCancelledPayload;
+use App\Data\Billing\InvoicePaidData;
+use App\Data\Billing\InvoiceCancelledData;
 use App\Exceptions\InvalidTransitionException;
 
 class Invoice extends Model
@@ -73,7 +73,7 @@ class Invoice extends Model
         return ['status' => InvoiceStatus::class];
     }
 
-    public function markPaid(string $paymentId): InvoicePaidPayload
+    public function markPaid(string $paymentId): InvoicePaidData
     {
         if ($this->status !== InvoiceStatus::Pending) {
             throw new InvalidTransitionException(
@@ -85,10 +85,10 @@ class Invoice extends Model
         $this->payment_id = $paymentId;
         $this->save();
 
-        return InvoicePaidPayload::fromEvent($this, $paymentId);
+        return InvoicePaidData::fromEvent($this, $paymentId);
     }
 
-    public function cancel(): InvoiceCancelledPayload
+    public function cancel(): InvoiceCancelledData
     {
         if ($this->status === InvoiceStatus::Paid) {
             throw new InvalidTransitionException('Cannot cancel a paid invoice.');
@@ -97,7 +97,7 @@ class Invoice extends Model
         $this->status = InvoiceStatus::Cancelled;
         $this->save();
 
-        return InvoiceCancelledPayload::fromEvent($this);
+        return InvoiceCancelledData::fromEvent($this);
     }
 }
 ```
@@ -152,7 +152,7 @@ Every domain transition emits a Data DTO that carries the information downstream
 
 **Rules:**
 - Data DTOs live in `app/Data/{Context}/`. They are **readonly data carriers** — no behaviour, no side effects.
-- One DTO per transition. `InvoicePaidPayload` is correct. `InvoiceStatusChangedData` is wrong.
+- One DTO per transition. `InvoicePaidData` is correct. `InvoiceStatusChangedData` is wrong.
 - Include only data needed by listeners/workflow steps — not the entire model state.
 - Never include infrastructure objects (Request, Response, Eloquent models).
 - Use a `fromEvent()` static factory to construct the DTO from the domain model.
@@ -169,7 +169,7 @@ namespace App\Data\Billing;
 use App\Models\Invoice;
 use DateTimeImmutable;
 
-final readonly class InvoicePaidPayload
+final readonly class InvoicePaidData
 {
     public function __construct(
         public string $invoiceId,
@@ -200,7 +200,7 @@ namespace App\Data\Billing;
 use App\Models\Invoice;
 use DateTimeImmutable;
 
-final readonly class InvoiceCancelledPayload
+final readonly class InvoiceCancelledData
 {
     public function __construct(
         public string $invoiceId,
@@ -368,7 +368,7 @@ it('marks invoice as paid through the action', function () {
 | Status checks in controllers | Business rules leak to HTTP layer | Move to model transition method |
 | Side effects in transition method | Untestable; hidden dependencies | Extract to action or workflow step |
 | Generic exceptions | Callers cannot distinguish failures | Typed exceptions |
-| `StatusChangedPayload` DTO | Forces listeners to re-implement transition logic | Named Data DTOs (`InvoicePaidPayload`) |
+| `StatusChangedData` DTO | Forces listeners to re-implement transition logic | Named Data DTOs (`InvoicePaidData`) |
 | Model references another context's data | Hard coupling; cannot evolve independently | Reference by ID via Shared Primitives |
 
 ## Directory Structure
@@ -381,8 +381,8 @@ app/Enums/Billing/
 └── InvoiceStatus.php
 
 app/Data/Billing/
-├── InvoicePaidPayload.php
-└── InvoiceCancelledPayload.php
+├── InvoicePaidData.php
+└── InvoiceCancelledData.php
 
 app/Exceptions/
 └── InvalidTransitionException.php
