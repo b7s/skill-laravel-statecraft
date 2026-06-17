@@ -454,7 +454,7 @@ if (str_ends_with($file, '.php')) {}
 if (strpos($haystack, $needle) !== false) {}
 ```
 
-The same for `mb_*` functions.
+The same for `mb_*` functions. (attention: mb_* functions, like mb_strlen/mb_substr count UTF-8 characters not bytes, so content with multi-byte sequences will be corrupted)
 
 ### Avoid `count()` in Loops
 ```php
