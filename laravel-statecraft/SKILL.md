@@ -47,6 +47,7 @@ Contexts communicate through **explicit integration patterns** (Customer/Supplie
 15. **Jobs Respect Transaction Boundaries** — Events dispatched inside `DB::transaction()` use `DB::afterCommit()` so they only fire after the data is committed.
 16. **Request Tracing Is Non-Negotiable** — Every API route runs `X-Request-ID` middleware.
 17. **Form Requests Only, No Inline Validate** — Controllers must use Form Requests for validation, never `$request->validate()`. The Form Request validates and returns the 422 Problem+JSON automatically; the controller only receives validated input via `$request->payload()`.
+18. **Text Translation Is Mandatory** — All user-facing text must be translated using Laravel's localization features. All text must be inside the `__()` helper.
 
 ## Why Bounded Contexts?
 
