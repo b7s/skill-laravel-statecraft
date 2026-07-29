@@ -68,9 +68,7 @@ final class CreateInvoice
 {
     public function __invoke(CreateInvoiceData $payload): Invoice
     {
-        return DB::transaction(function () use ($payload): Invoice {
-            return Invoice::query()->create($payload->toArray());
-        });
+        return DB::transaction(static fn (): Invoice => Invoice::query()->create($payload->toArray()));
     }
 }
 
