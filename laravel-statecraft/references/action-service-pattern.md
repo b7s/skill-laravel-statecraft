@@ -4,7 +4,7 @@
 
 The Action Pattern represents **one atomic operation**: save an invoice, generate a PDF, send an email, delete a user. Each action is a single class that does **exactly one thing**.
 
-Actions live in `App\Actions\{Context}\` as a flat folder — one file per action. They receive validated data, perform ONE operation, wrap mutations in DB transactions, and return results.
+Actions live in `App\Actions\{Context}\` as a flat folder — one file per action. They receive already-validated, already-transformed domain data (Eloquent models or typed DTOs), perform ONE operation, wrap mutations in DB transactions, and return results. **Actions never validate or transform their input** — that work is done by the Form Request's `payload()` method before the action is ever called.
 
 **Actions use `__invoke()` magic method** — makes them invokable objects: `$action($param)` instead of `$action->execute($param)` or `$action->handle($param)`.
 
@@ -31,6 +31,54 @@ Actions live in `App\Actions\{Context}\` as a flat folder — one file per actio
 - **Pure logic = Service (no actions)**
 
 ## Core Rules
+
+### 0. Actions Receive Domain-Ready Data Only — No Validation, No Transformation
+
+An action receives data that has already been validated, transformed, and fully resolved. The action never:
+- **Validates** input (that's the Form Request's job)
+- **Transforms** types (casting strings to ints, parsing dates — that's the `payload()` method's job)
+- **Applies defaults** (that's the `payload()` method's job)
+- **Fetches** related entities the caller could pass in
+
+```php
+// BAD — action validates and transforms
+final class CreateInvoice
+{
+    public function __invoke(array $data): Invoice
+    {
+        $amount = (int) ($data['amount_cents'] ?? 0);
+        $country = (string) ($data['country'] ?? 'US');
+        // validation + transformation inside the action — wrong layer
+    }
+}
+
+// BAD — action applies defaults
+final class CreateInvoice
+{
+    public function __invoke(CreateInvoiceData $payload): Invoice
+    {
+        $status = $payload->status ?? InvoiceStatus::Pending;
+        $gracePeriod = $payload->gracePeriodHours ?? 24;
+        // defaults applied inside the action — the payload() method should do this
+    }
+}
+
+// GOOD — action receives fully resolved data
+final class CreateInvoice
+{
+    public function __invoke(CreateInvoiceData $payload): Invoice
+    {
+        return DB::transaction(function () use ($payload): Invoice {
+            return Invoice::query()->create($payload->toArray());
+        });
+    }
+}
+
+// The Form Request's payload() transforms and applies defaults:
+// $this->integer('grace_period_hours', 24) — typed + default applied at boundary
+```
+
+The `payload()` method on the Form Request is the single boundary where HTTP input becomes domain intent. After that, everything downstream (controller, action, service) works in resolved domain types.
 
 ### 1. One Action = One Atomic Operation
 
@@ -1022,6 +1070,7 @@ it('rolls back on failure', function () {
 |---|---|---|
 | Action receives Request object | Not reusable from console/jobs/other services | Accept Eloquent model or typed DTO |
 | Action receives `array $data` | No type safety, typos pass silently, no IDE support | Use typed DTO (`CreateInvoiceData`) |
+| Action transforms input data | Casts, defaults, and parsing in the wrong layer; not reusable from CLI/jobs where data may already be typed | `payload()` on the Form Request handles all transformation; action receives fully resolved types |
 | Action validates input | Duplicates Form Request validation | Let Form Request validate |
 | Action calls other actions | Violates Single Responsibility; should be service | Extract to Service |
 | Action dispatches jobs | Two responsibilities (execute + schedule) | Service dispatches jobs; actions emit domain events only via `DB::afterCommit()` |

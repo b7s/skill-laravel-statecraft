@@ -26,9 +26,11 @@ parameters:
     level: 6
     paths:
         - app
-    ignoreErrors:
-        - '#Cannot cast mixed to string\.#'
 EOF
+
+# Use typed config accessors (config()->integer() etc.) instead of bare config() calls.
+# This removes the need for '#Cannot cast mixed to string\.#' ignores at any level.
+# See php-rules.md → Typed Config Accessors.
 ```
 
 ## Mandatory Quality Gate Workflow

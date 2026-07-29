@@ -598,6 +598,59 @@ if ($tool === null) {
 - Keep methods thin, delegate to Actions
 - Max 1000 lines per file
 
+### Typed Config Accessors (Mandatory)
+Never use bare `config()` calls. Always use typed accessors with a default value to ensure type safety at the PHPStan level:
+
+```php
+// Bad — mixed return, PHPStan errors at level max
+$timeout = config('relayai.timeout_seconds', 60);
+$retries = config('relayai.retries', 3);
+$enabled = config('relayai.some_flag', false);
+$entries = config('relayai.entries', []);
+$gatewayKey = config('relayai.gateway_key');
+
+// Good — typed, PHPStan-safe at any level
+$timeout = config()->float('relayai.timeout_seconds', 60.0);
+$retries = config()->integer('relayai.retries', 3);
+$enabled = config()->boolean('relayai.some_flag', false);
+$entries = config()->array('relayai.entries', []);
+$gatewayKey = config()->string('relayai.gateway_key', '');
+```
+
+Available typed accessors:
+| Method | Returns | Default type |
+|---|---|---|
+| `config()->string($key, $default)` | `string` | `string` |
+| `config()->integer($key, $default)` | `int` | `int` |
+| `config()->float($key, $default)` | `float` | `float` |
+| `config()->boolean($key, $default)` | `bool` | `bool` |
+| `config()->array($key, $default)` | `array` | `array` |
+
+**Config file values must be cast to the correct PHP type.** Environment variables are always strings at runtime, so `env('TIMEOUT', 60)` returns `'60'` (string) when the env var is set, or `60` (int) when it falls back to the default. Always cast explicitly so the runtime type matches what `config()->xxx()` expects:
+
+```php
+// config/relayai.php
+return [
+    'retries'         => (int) env('RELAYAI_RETRIES', 3),
+    'timeout_seconds' => (float) env('RELAYAI_TIMEOUT_SECONDS', 60),
+    'gateway_key'     => (string) env('RELAYAI_GATEWAY_KEY', ''),
+    'feature_flag'    => (bool) env('RELAYAI_FEATURE_FLAG', false),
+    'entries'         => json_decode((string) env('RELAYAI_ENTRIES', '[]'), true),
+];
+```
+
+| Config type | Cast | Env example |
+|---|---|---|
+| `integer()` | `(int)` | `(int) env('RETRIES', 3)` |
+| `float()` | `(float)` | `(float) env('TIMEOUT', 60)` |
+| `string()` | `(string)` | `(string) env('KEY', '')` |
+| `boolean()` | `(bool)` | `(bool) env('FLAG', false)` |
+| `array()` | `json_decode((string) env(...), true)` | `json_decode((string) env('ENTRIES', '[]'), true)` |
+
+**Why this matters:** Without the cast, when the env var IS set, its value comes through as a string — `config()->integer()` then throws because the value is a string, not an int. The cast in the config file guarantees the correct type in every environment (local, production, CI). The typed accessor (`config()->integer()`) then validates the type at runtime, catching config mismatches early.
+
+**Default values must also be the correct type** — use `60` for integer, `60.0` for float, `''` for string, `false` for boolean.
+
 ### Models
 - Use `casts()` method over `$casts` property (Laravel 12+)
 - Always create factories and seeders
