@@ -48,6 +48,7 @@ Contexts communicate through **explicit integration patterns** (Customer/Supplie
 16. **Request Tracing Is Non-Negotiable** — Every API route runs `X-Request-ID` middleware.
 17. **Form Requests Only, No Inline Validate** — Controllers must use Form Requests for validation, never `$request->validate()`. The Form Request validates and returns the 422 Problem+JSON automatically; the controller only receives validated input via `$request->payload()`.
 18. **Text Translation Is Mandatory** — All user-facing text must be translated using Laravel's localization features. All text must be inside the `__()` helper.
+19. **Skill Precedence Over Legacy Code** — When you encounter code in the project that is incompatible with this skill (inline `$request->validate()`, missing Form Requests, status checks in controllers, raw DB writes outside Actions, missing audit records, etc.), **fix the code to comply with the skill** and follow the skill going forward. Do not propagate the legacy pattern into new code, and do not copy a broken precedent just because it already exists. The skill is the contract; the codebase may lag behind it. This applies to both the file you were asked to touch and any sibling code it must integrate with (e.g., refactoring a controller to Form Requests even if its neighbors still use inline validation — fix the neighbors when you touch them, or at minimum never introduce new violations).
 
 ## Why Bounded Contexts?
 
@@ -323,6 +324,8 @@ See `references/quality-gates.md` for complete testing patterns.
 | 17 | Request Tracing | X-Request-ID middleware on all API routes |
 | 18 | API Versioning | Versioned from day one (`/v1/` prefix) |
 | 19 | Validation Layer | Form Requests only — no inline `$request->validate()` in controllers |
+| 20 | Text Translation | All user-facing text wrapped in `__()` |
+| 21 | Skill Precedence | Incompatible legacy code is fixed to comply with the skill, never copied as precedent |
 
 ## Stop Conditions
 
