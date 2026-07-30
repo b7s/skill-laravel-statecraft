@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Action Pattern represents **one atomic operation**: save an invoice, generate a PDF, send an email, delete a user. Each action is a single class that does **exactly one thing**.
+The Action Pattern represents **one atomic operation**: save an invoice, generate a PDF, send an email, delete a user. Each action is a single class that does **exactly one thing**. Action needs to receive the data ready. Ideally via DTO.
 
 Actions live in `App\Actions\{Context}\` as a flat folder — one file per action. They receive already-validated, already-transformed domain data (Eloquent models or typed DTOs), perform ONE operation, wrap mutations in DB transactions, and return results. **Actions never validate or transform their input** — that work is done by the Form Request's `payload()` method before the action is ever called.
 
