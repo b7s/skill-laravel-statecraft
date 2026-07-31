@@ -50,6 +50,7 @@ Contexts communicate through **explicit integration patterns** (Customer/Supplie
 18. **Text Translation Is Mandatory** — All user-facing text must be translated using Laravel's localization features. All text must be inside the `__()` helper.
 19. **Typed** — Every constant, property, parameter, and return type must be explicitly typed.
 20. **Skill Precedence Over Legacy Code** — When you encounter code in the project that is incompatible with this skill (inline `$request->validate()`, missing Form Requests, status checks in controllers, raw DB writes outside Actions, Actions with validation or data transformations - Actions needs to receive the data ready for use -, missing audit records, etc.), **fix the code to comply with the skill** and follow the skill going forward. Do not propagate the legacy pattern into new code, and do not copy a broken precedent just because it already exists. The skill is the contract; the codebase may lag behind it. This applies to both the file you were asked to touch and any sibling code it must integrate with (e.g., refactoring a controller to Form Requests even if its neighbors still use inline validation — fix the neighbors when you touch them, or at minimum never introduce new violations).
+21. Columns capable of using ENUMs should use them; never use hardcoded values. Models with status-type columns, for example, should cast them to the Enum type. Saving data to the database should also utilize Enums—never hardcoded strings.
 
 ## Why Bounded Contexts?
 
