@@ -159,7 +159,7 @@ declare(strict_types=1);
 ```
 
 ### Explicit Types Everywhere
-Every constant, property, parameter, and return type must be explicitly typed.
+Every constant, property, parameter, and return type must be explicitly typed. All consts must have the correct type.
 
 **Typed constants (PHP 8.3+):**
 ```php
