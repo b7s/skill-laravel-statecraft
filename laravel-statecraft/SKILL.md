@@ -52,6 +52,73 @@ Contexts communicate through **explicit integration patterns** (Customer/Supplie
 19. **Typed** — Every constant, property, parameter, and return type must be explicitly typed. The same when use the config() helper: `config()->integer('xxx.yyy')`, `config()->boolean('xxx.yyy')`, etc.
 20. **Skill Precedence Over Legacy Code** — When you encounter code in the project that is incompatible with this skill (inline `$request->validate()`, missing Form Requests, status checks in controllers, raw DB writes outside Actions, Actions with validation or data transformations - Actions needs to receive the data ready for use -, missing audit records, etc.), **fix the code to comply with the skill** and follow the skill going forward. Do not propagate the legacy pattern into new code, and do not copy a broken precedent just because it already exists. The skill is the contract; the codebase may lag behind it. This applies to both the file you were asked to touch and any sibling code it must integrate with (e.g., refactoring a controller to Form Requests even if its neighbors still use inline validation — fix the neighbors when you touch them, or at minimum never introduce new violations).
 21. Columns capable of using ENUMs should use them; never use hardcoded values. Models with status-type columns, for example, should cast them to the Enum type. Saving data to the database should also utilize Enums—never hardcoded strings.
+22. **Access Control Is Layered and Proven** — Every `show`/`update`/`destroy` route is defended at three layers: a Policy/Gate (controller authorisation), boundary-scoped route-model binding (data-access layer — a foreign actor's id MUST yield 404, never 403), and a transition-guard ownership assertion in the model (the same row check that survives jobs/listeners/commands bypassing HTTP). A declared IDOR regression suite PROVES the contract end-to-end: it fires every route as a cross-boundary attacker and asserts 404/422 — never 200, never 403. Policies and scoped bindings are config; the test is the contract. **The boundary is not always a tenant** — single-tenant apps with user-owned resources, org-scoped apps, and platform/central-admin impersonation flows have the same IDOR risk; the trait ships four swappable hooks so the sweep works across topologies without rewrites. See `references/security-access-control.md` and the summary below.
+
+## Security & Access Control — Summary
+
+OWASP A01 (Broken Access Control) is the #1 web risk. A correct state machine is worthless if the wrong actor can reach it. **Access control is a first-class Statecraft layer, not an afterthought.** Full treatment: `references/security-access-control.md`.
+
+### Every app has an access boundary — not always a tenant
+
+The IDOR suite is talked about in tenant terms because that's the canonical, hardest case. **But the system does not always have a tenant.** What every system DOES have is an **access boundary** — the wall deciding which rows an authenticated actor may touch. The same defence-in-depth applies regardless of what the wall is:
+
+| Topology | Boundary key | A leak looks like… |
+|---|---|---|
+| Multi-tenant per-tenant DB (`stancl/tenancy`) | tenant key | Tenant B's user edits tenant A's invoice |
+| Multi-tenant schema / column-based | `tenant_id` column | Same — wrong row resolves |
+| Single-tenant, user-owned (`users/{user}/orders/{order}`) | owning user id | User B edits user A's order |
+| Org/team-scoped (GitHub-style) | org id | Org B's member reads org A's repo |
+| Platform / central admin (impersonation) | platform-staff vs impersonated actor | Self-service impersonation Don't-impersonate |
+| Single-tenant, all rows shared | none | — no suite (still need rate limits + input validation) |
+| Public read-only API (no auth) | none | — no suite (modify verbs must 401/403) |
+
+The suite applies wherever a boundary exists. Single-tenant ≠ exempt when resources are user-owned.
+
+### The three layers (defence in depth)
+
+```
+1. Policy / Gate            — who may call this verb on this model class? (HTTP-facing)
+2. Boundary-Scoped Binding  — only resolve rows owned by the acting actor; foreign id → 404
+3. Transition Guard         — model re-asserts ownership; survives jobs/listeners/commands
+```
+
+Layer 2 is the real defence — it works for every entry point, not just HTTP. Layer 1 is necessary but not sufficient (a second caller bypasses the HTTP gate). Layer 3 is the in-model guarantee that survives non-HTTP callers.
+
+**Hard contract:** a foreign actor's resource id MUST return **404**, never **403**. A 403 on a resolvable binding is an information leak — it confirms the id exists in another boundary.
+
+### What you must build
+
+1. **Boundary-scoped route-model binding** — per-tenant DB makes it automatic; schema/column tenancy needs `scopeBindings()` or a custom `Route::bind` with the acting boundary key (`TenantContext::currentId()`, `Auth::id()`, `OrgContext::currentId()`, …).
+2. **Model transition-guard** — every transition method re-checks ownership and throws a typed `AccessDeniedException` (jobs/listeners bypass HTTP). Swap `tenant_id === TenantContext::currentId()` for `user_id === Auth::id()` etc.
+3. **IDOR regression suite** — `tests/Support/TestsCrossTenantAccess.php` trait + `tests/Feature/Security/CrossTenantIdorTest.php`. The trait is **boundary-agnostic** with four swappable hooks (`enterActorContext`, `exitActorContext`, `actorRequestHeaders`, `buildOpposingActors`) defaulting to `stancl/tenancy`; single-tenant / org-scoped / platform-admin apps override them on `tests/TestCase.php`. Data-driven catalogue: build actor A's row, attack as actor B, assert 404/422 across every show/update/destroy. New routes just append a row in `beforeEach` — the sweep picks them up.
+
+### Officer critical hit-list (gotchas)
+
+- **pest-plugin-phpstan skips traits in `uses()`** — put `use TestsCrossTenantAccess;` on `tests/TestCase.php` so phpstan analyses it (this is also where the four hooks are overridden per topology). Pest re-applying the same trait via `uses()` in the test-file subclass is a legal no-op.
+- **Don't assume tenancy is always on** — the default hooks call `tenancy()`. Single-tenant / org-scoped / platform-admin apps have no `tenancy()` helper; override the hooks on `tests/TestCase.php` before invoking the suite. "Cross-tenant" is the historical name for "cross-boundary".
+- **Catalogue is an instance property, never static** — a `self::$idorRoutes` static set via `YourTrait::setTenantIdorRoutes()` binds to the trait class, but `$this->sweepIdor()` reads from the pest wrapper → catalogue silently empty → 0 assertions.
+- **Nested routes need `params` + pre-loaded parents** — `invoices/{invoice}/payments/{payment}` needs both parents in `route()`; after `exitActorContext()` the boundary's connection is gone, so pre-load via `$child->setRelation('parent', $parent)` in the factory.
+- **Route name shapes** — `apiResource` routes are unprefixed (`invoices.show`); explicit `->name(...)` routes carry their literal name (often `api.v1.invoices.show`). Verify with `php artisan route:list`; catalogue keys must match verbatim.
+- **Kill switch test** — assert every boundary-scoped route (tenant middleware / `scopeBindings()` / `users/{user}/...` convention) appears in the catalogue, otherwise coverage silently regresses when a route is added without a row.
+
+### When the full IDOR suite is mandatory
+
+| Scenario | Suite required? |
+|---|---|
+| Multi-tenant per-tenant DB | Yes — the binding is your guarantee; the suite PROVES it |
+| Multi-tenant schema/column | Yes — even more critical (binding needs manual scoping) |
+| Single-tenant, user-owned resources (`users/{user}/...`) | Yes — swap the hooks; the boundary is the owning user |
+| Org/team-scoped | Yes — swap the hooks; boundary = org id |
+| Platform / central admin (impersonation) | Yes — assert the impersonation stamp can't be self-service |
+| Single-tenant, all rows shared; public read-only API | No — no boundary; rely on rate limits + input validation |
+
+### Gate
+
+```
+pest --fail-on-risky --parallel tests/Feature/Security
+```
+
+Add it to the project's quality-gate checklist alongside `pest --parallel`, `phpstan`, `pint`, and `catraca`. A regression here is a **P0 vulnerability**, not a styling nit.
 
 ## Why Bounded Contexts?
 
@@ -289,6 +356,8 @@ php artisan pest:install
 ./vendor/bin/catraca
 ./vendor/bin/pint
 ./vendor/bin/phpstan analyse
+# Multi-tenant apps: also run the cross-tenant IDOR sweep (P0 if it regresses)
+./vendor/bin/pest --fail-on-risky --parallel tests/Feature/Security
 ```
 
 ### Testing Requirements
@@ -301,6 +370,10 @@ php artisan pest:install
 | Jobs | Execution + failure handling |
 
 **Database Safety:** Every test that touches the database must run on a dedicated test database. Use `php artisan test` which automatically switches to the test database, or ensure `DB_CONNECTION` in your `.env.testing` points to a separate database. Never run tests against a development, staging, or production database.
+
+> Use `--parallel` to run tests quickly
+> Use `--TIA` to improve performance when available (PestPHP >= v5)
+> Use `--fail-on-risky` to make risky tests fail so we can see them and fix
 
 See `references/quality-gates.md` for complete testing patterns.
 
@@ -317,7 +390,7 @@ See `references/quality-gates.md` for complete testing patterns.
 | 7 | Action Consistency | One action per file, DB transactions, no HTTP |
 | 8 | Test Coverage | Every action, transition, listener tested |
 | 9 | Database Safety | Tests run on a dedicated test database only |
-| 10 | PHPStan | Level 6 compliance |
+| 10 | PHPStan | Level 6 compliance (default) or the one configured in the project |
 | 11 | Code Style | Laravel Pint formatted |
 | 12 | Quality Metrics | b7s/catraca passes |
 | 13 | Automated | Run after every change |
@@ -329,6 +402,8 @@ See `references/quality-gates.md` for complete testing patterns.
 | 19 | Validation Layer | Form Requests only — no inline `$request->validate()` in controllers |
 | 20 | Text Translation | All user-facing text wrapped in `__()` |
 | 21 | Skill Precedence | Incompatible legacy code is fixed to comply with the skill, never copied as precedent |
+| 22 | Access Control | Three-layer defence (Policy/Gate + boundary-scoped binding + transition guard) for show/update/destroy; foreign id → 404 never 403. Boundary is tenant, user, org, or platform-admin — not always tenant. |
+| 23 | IDOR Sweep | Cross-boundary regression suite asserts 404/422 on every show/update/destroy; trait ships four swappable hooks; mandatory whenever an access boundary exists |
 
 ## Stop Conditions
 
@@ -346,5 +421,6 @@ See `references/quality-gates.md` for complete testing patterns.
 - `references/job-orchestration-pattern.md` — Chains, batches, retry logic, afterCommit
 - `references/audit-log-pattern.md` — Append-only audit records, actor tracking, JSONB context
 - `references/api-patterns.md` — Problem+JSON error responses, idempotency keys, route versioning, Sunset headers
+- `references/security-access-control.md` — Multi-tenant IDOR prevention: three-layer access control, the cross-tenant regression suite trait, gotchas (pest-plugin-phpstan trait skipping, static vs instance catalogue, nested routes + tenancy end, route-name shapes, kill switch)
 - `references/php-rules.md` — PHP/Laravel coding standards, request tracing
 - `references/quality-gates.md` — Testing, PHPStan, Pint, Catraca
