@@ -703,7 +703,7 @@ Reference controllers as a class, never a closure, because closures cannot be ro
 
 use App\Http\Controllers\Keys\IssueKeyController;
 
-$actualVersion = 'v1';
+$actualVersion = config('app.actual_version', 'v1');
 
 Route::prefix($actualVersion)->post('/keys', IssueKeyController::class);
 

@@ -53,13 +53,17 @@ Auto-fixes indentation, import ordering, trailing commas, blank lines before ret
 
 Verifies all tests pass, no regressions are introduced, new features are covered. **If tests fail:** Fix the code or update the tests. Never skip failing tests.
 
+> Use `--parallel` to run tests quickly
+> Use `--TIA` to improve performance when available (PestPHP >= v5)
+> Use `--fail-on-risky` to make risky tests fail so we can see them and fix
+
 ### Step 3: Static Analysis
 
 ```bash
 ./vendor/bin/phpstan analyse
 ```
 
-Catches type errors, undefined methods/properties, invalid return types, null pointer risks, dead code. **Must pass at level 6.**
+Catches type errors, undefined methods/properties, invalid return types, null pointer risks, dead code. **Must pass at level 6 or the one configured in the project.**
 
 ### Step 4: Code Quality Metrics
 
@@ -67,7 +71,7 @@ Catches type errors, undefined methods/properties, invalid return types, null po
 ./vendor/bin/catraca
 ```
 
-Detects code duplication (DRY violations), Single Responsibility violations, cyclomatic complexity issues, large classes/methods, god objects. **Exit code 0 = pass, 1 = fail.**
+Detects code duplication (DRY violations), Security issues, Single Responsibility violations, cyclomatic complexity issues, large classes/methods, god objects. **Exit code 0 = pass, 1 = fail.**
 
 ## Testing Requirements
 
