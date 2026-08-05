@@ -261,21 +261,22 @@ See `references/action-service-pattern.md` for full rules, sync vs async, naming
 
 ```
 app/
-├── Models/                          # Eloquent models with transition methods
-├── Enums/{Context}/                 # Status enums (one per context)
-├── Data/{Context}/                  # Typed DTOs — input payloads + event data
-├── Exceptions/                      # Typed exceptions
-├── Actions/{Context}/               # One action per file, flat folder
-├── Listeners/{Context}/             # Event listeners
-├── Jobs/{Context}/                  # Queued jobs for async operations
-├── Services/{Context}/              # Orchestrator + logic services
-├── Infrastructure/{Context}/ACL/    # Anti-Corruption Layer (rarely needed)
+├── Models/{Context}/V{N}/              # Eloquent models with transition methods
+├── Enums/{Context}/V{N}/               # Status enums (one per context)
+├── Data/{Context}/V{N}/                # Typed DTOs — input payloads + event data
+├── Exceptions/                         # Typed exceptions
+├── Actions/{Context}/V{N}/             # One action per file, flat folder
+├── Listeners/{Context}/V{N}/           # Event listeners
+├── Jobs/{Context}/V{N}/                # Queued jobs for async operations
+├── Services/{Context}/V{N}/            # Orchestrator + logic services
+├── Infrastructure/{Context}/ACL/      # Anti-Corruption Layer (rarely needed)
 └── Http/
-    ├── Controllers/
-    └── Requests/                    # Form Requests
+    ├── Controllers/{Context}/V{N}/
+    ├── Requests/{Context}/V{N}/        # Form Requests
+    └── Resources/{Context}/V{N}/        # API resources
 ```
 
-No custom `app/Domain/` or `app/ValueObjects/` folders.
+No custom `app/Domain/` or `app/ValueObjects/` folders. The `{Context}` segment groups by Bounded Context first; the `V{N}` segment is the innermost namespace, so grouping stays by context, not by version. The current version is the one in `config()->string('app.actual_version', 'v1')` — never a hardcoded literal in routes, controllers, URLs, or route names (Gate 18).
 
 ## The Core Patterns
 
@@ -398,7 +399,7 @@ See `references/quality-gates.md` for complete testing patterns.
 | 15 | Audit Trail | State-changing actions write append-only audit records |
 | 16 | Transaction Safety | Events inside transactions use `DB::afterCommit()` |
 | 17 | Request Tracing | X-Request-ID middleware on all API routes |
-| 18 | API Versioning | Versioned from day one (`/v1/` prefix) |
+| 18 | API Versioning | Versioned from day one (`/v1/` prefix); current version read once from `config()->string('app.actual_version', 'v1')` (env-backed) — never a literal in routes/controllers/URLs/route names. Models, Enums, Data, Actions, Listeners, Jobs, Services, Controllers, Requests, and Resources are all namespaced `{Context}\V{N}\` so the boundary is visible in the file tree, not just the URL. See `references/api-patterns.md` § Route Versioning. |
 | 19 | Validation Layer | Form Requests only — no inline `$request->validate()` in controllers |
 | 20 | Text Translation | All user-facing text wrapped in `__()` |
 | 21 | Skill Precedence | Incompatible legacy code is fixed to comply with the skill, never copied as precedent |

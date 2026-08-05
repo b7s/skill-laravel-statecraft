@@ -334,45 +334,89 @@ it('returns cached response on idempotency key replay', function () {
 
 Adding `/v1` to a production API is itself a breaking change (every consumer must update their URLs). Version from day one so the prefix is free.
 
-### Namespace Controllers by Version
+### Version Is Config-Driven, Never Hardcoded
 
+The current API version lives in **one place**: `config/app.php`, read from `env()` with a typed `config()` call and a `v1` default. It must never appear as a string literal in a route file, a controller, a URL generator, or a route name. Setting it once in config means a typo cannot silently route half your API to the wrong prefix, and changing it is a one-line deploy (no code edit, no missed file).
+
+```php
+// config/app.php
+'actual_version' => env('APP_ACTUAL_VERSION', 'v1'),
 ```
-App\Http\Controllers\Keys\V1\IssueKeyController
-App\Http\Controllers\Keys\V2\IssueKeyController
+
+```dotenv
+# .env
+APP_ACTUAL_VERSION=v1
 ```
-
-This makes the version boundary **visible in code**. You physically cannot put v2 logic in a v1 controller because they are separate files.
-
-### Route Registration
-
-Use a version variable so the current API version is defined in **one place**. When v2 arrives, you add a new block — the v1 block stays untouched.
 
 ```php
 // routes/api.php
-$actualVersion = 'v1';
+// Directive 19 — typed config() helper, default 'v1'.
+$actualVersion = config()->string('app.actual_version', 'v1');
 
+// "current" routes — the ones that have not been superseded — use $actualVersion.
 Route::prefix($actualVersion)->group(function () {
     Route::post('/keys', \App\Http\Controllers\Keys\V1\IssueKeyController::class);
     Route::delete('/keys/{key}', \App\Http\Controllers\Keys\V1\RevokeKeyController::class);
     Route::post('/invoices', \App\Http\Controllers\Billing\V1\CreateInvoiceController::class);
 });
 
-// When v2 ships, add a second block — v1 stays as-is — change the $actualVersion to new version and old as hardcoded or create a new var 
+// When v2 ships, the **previous** version becomes an explicit, literal
+// prefix block (it is now pinned history, not "current"), and
+// $actualVersion moves to v2 for the new code. Never edit a retired
+// version's block after it ships — that's the whole point.
+//
 // Route::prefix('v1')->group(function () {
 //     Route::post('/keys', \App\Http\Controllers\Keys\V1\IssueKeyController::class);
 // });
-
+//
 // Route::prefix($actualVersion)->group(function () {
 //     Route::post('/keys', \App\Http\Controllers\Keys\V2\IssueKeyController::class);
 // });
 ```
 
 **Rules:**
-- `$actualVersion` is set **once** at the top of the file.
-- All new unversioned routes belong under `$actualVersion`.
-- When a v2 endpoint differs from v1, add an explicit `'v2'` prefix block — never modify the v1 block.
-- The variable makes it trivial to find which version is "current" and prevents typo bugs (`'v1'` vs `'V1'` vs `'v01'`).
-- You can group all routes under the correct version using `prefix`. The variable on top will tell the AI agent which is the latest version.
+- `$actualVersion` is read **once** at the top of every route file from `config()->string('app.actual_version', 'v1')` — never `'v1'` as a literal in a route. The literal only lives in `config/app.php` and `.env`.
+- All new, unversioned "current" routes belong under `$actualVersion`.
+- When a v2 endpoint differs from v1, pin the v1 block with a literal `'v1'` prefix (it is now retired history, not the current version) and add a new `$actualVersion` block for v2 — never modify a retired block.
+- The config key makes it trivial to find which version is "current" across every route file and prevents typo bugs (`'v1'` vs `'V1'` vs `'v01'`) — config is the single source of truth.
+- The `config()->string(...)` form (not `config('app.actual_version')`) is **mandatory** per Directive 19 — the typed accessor is itself the version-source-of-truth contract.
+- You can group all routes under the correct version using `prefix`. The config key on top tells the AI agent which is the latest version — only one place to bump, no risk of leaving a stale literal somewhere.
+
+### Namespace by Version — Models, Controllers, Request, Resources, Actions, Jobs
+
+The version boundary must be **visible in the file tree**, not just in the URL. The same concept that can host two `IssueKeyController`s without collision must also host two `ApiKey` models, two `IssueKeyData` payloads, and two `IssueKey` actions. **Bounded Context already owns every other layer; version sits *inside* the context, as the innermost namespace segment**, so grouping remains by context first and version second — never version-as-top-level-folder.
+
+```
+app/
+├── Models/{Context}/V{N}/                 # e.g. app/Models/Keys/V1/ApiKey.php
+├── Enums/{Context}/V{N}/
+├── Data/{Context}/V{N}/
+├── Actions/{Context}/V{N}/
+├── Listeners/{Context}/V{N}/
+├── Jobs/{Context}/V{N}/
+├── Services/{Context}/V{N}/
+└── Http/
+    ├── Controllers/{Context}/V{N}/         # e.g. app/Http/Controllers/Keys/V1/IssueKeyController.php
+    ├── Requests/{Context}/V{N}/
+    └── Resources/{Context}/V{N}/
+```
+
+Example versioned namespaces:
+
+```
+App\Models\Keys\V1\ApiKey
+App\Models\Keys\V2\ApiKey                  # different invariants, different file
+App\Enums\Keys\V1\ApiKeyStatus
+App\Data\Keys\V1\IssueKeyData
+App\Actions\Keys\V1\IssueKey
+App\Actions\Keys\V2\IssueKey                # different behaviour, different file
+App\Http\Controllers\Keys\V1\IssueKeyController
+App\Http\Controllers\Keys\V2\IssueKeyController
+App\Http\Requests\Keys\V1\IssueKeyRequest
+App\Http\Resources\Keys\V1\ApiKeyResource
+```
+
+This makes the version boundary **visible in code and in the file tree**. You physically cannot put v2 logic in a v1 controller or model because they are separate files in separate folders. When a breaking change is needed, you clone the slice of the Bounded Context you touch into a new `V{N}` folder and leave the original untouched — the same model, action, and controller pattern duplicated at the version level, mirroring the Bounded-Context split itself.
 
 ### The Sunset Pattern
 

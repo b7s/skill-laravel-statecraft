@@ -531,6 +531,23 @@ Routes like `invoices/{invoice}/payments/{payment}` need BOTH parents in `route(
 
 `apiResource` routes are **unprefixed** (`invoices.show`). Explicit `Route::get('...')->name('...')` routes carry their literal name (often `api.v1.invoices.show`). Verify with `php artisan route:list` — catalogue keys must match the registered names **verbatim**. The kill-switch test above surfaces mismatches.
 
+**Version segment in route names is also config-driven (Gate 18).** The `api.v1...` string you see in `route:list` is built at registration time from `config()->string('app.actual_version', 'v1')` — never write `'v1'` as a literal when you *name* a route. Register versioned names so the segment derives from the same config key as the prefix:
+
+```php
+// routes/api.php
+$actualVersion = config()->string('app.actual_version', 'v1');
+
+Route::prefix($actualVersion)
+    ->middleware(['request-id'])
+    ->name("api.{$actualVersion}.")
+    ->group(function () {
+        Route::get('invoices/{invoice}', [InvoiceController::class, 'show'])->name('invoices.show');
+        // registered as: api.v1.invoices.show  (when APP_ACTUAL_VERSION=v1)
+    });
+```
+
+The **catalogue keys in tests are fixture data, not source code** — they copy `route:list` verbatim, so they contain the literal `api.v1...` that was registered. That is correct and required (the test must assert against the name Lumen actually produced). The Gate 18 contract applies to *route registration*, not to test fixtures quoting the registry.
+
 ### 403 is a leak, not a pass
 
 A 403 on a route whose binding still **resolved the foreign row** confirms the id exists in another boundary — an information leak. The sweep asserts `404 || 422` only. If your policy design returns 403, either scope the binding so the row is not found (preferred) or accept the sweep will flag it.
