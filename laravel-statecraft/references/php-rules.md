@@ -481,6 +481,13 @@ public function readLines(string $path): \Generator
 }
 ```
 
+### Batch insertion efficiency
+
+Instead of calling `->create()` inside a foreach loop — which executes one database query per item — you use `->insert()` with an array of all items, so the database handles them in a single query. This reduces overhead, minimizes round trips, and significantly improves performance when inserting multiple records. At most, you can use a `foreach` loop to insert items in batches when dealing with a volume that puts the server at risk. Example: using to insert 1000 items per time.
+
+In short: avoid N queries, do 1 bulk query.
+
+
 ### Boolean Condition Ordering
 Order by cost (cheapest first):
 
